@@ -1,6 +1,8 @@
 # Other programs worth loading
 
-Programs that load with `kimtape` and where to get them. Addresses were taken
+Programs that load with `kimtape` and where to get them. Those marked **in the
+catalogue** can be fetched and loaded in one step with
+`examples/load.py <name>`; see `examples/load.py --list`. Addresses were taken
 from the tape records themselves, not from prose, so they can be checked against
 what `kimtape info` reports.
 

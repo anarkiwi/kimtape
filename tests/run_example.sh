@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Exercise examples/kimventure.sh end to end against the fake monitor.
-# Synthetic tapes stand in for the game, which is not ours to redistribute and
-# which CI has no business downloading.
+# Exercise examples/load.py end to end against the fake monitor, using a
+# catalogue of synthetic tapes served over file:// URLs.  Real programs are
+# not ours to redistribute and CI has no business downloading them.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -24,13 +24,28 @@ import sys
 from kimtape import Tape
 
 work = sys.argv[1]
-for name, base, size in (
-    ("Venture-ZeroPage.ptp", 0x0000, 0xEF),
-    ("Venture-Full.ptp", 0x0200, 600),
-):
+tapes = []
+for name, base, size in (("zeropage.ptp", 0x0000, 0xEF), ("game.ptp", 0x0200, 600)):
     mem = {base + i: (i * 7 + 3) & 0xFF for i in range(size)}
-    with open(os.path.join(work, name), "wb") as out:
+    path = os.path.join(work, name)
+    with open(path, "wb") as out:
         out.write(Tape.from_memory(name, mem).text())
+    tapes.append('{ url = "file://%s" }' % path)
+
+# a raw binary too, so the conversion path is exercised
+binary = os.path.join(work, "extra.bin")
+with open(binary, "wb") as out:
+    out.write(bytes(range(64)))
+tapes.append('{ url = "file://%s", at = "0500" }' % binary)
+
+with open(os.path.join(work, "programs.toml"), "w", encoding="ascii") as out:
+    out.write(
+        "[demo]\n"
+        'title = "Demo"\nauthor = "Tests"\ndescription = "Synthetic"\n'
+        'io = "keypad"\nstart = "0200"\nsource = "https://example.invalid"\n'
+        'deposits = [{ addr = "00F1", bytes = "DAFDFF" }]\n'
+        "tapes = [\n  %s,\n]\n" % ",\n  ".join(tapes)
+    )
 EOF
 
 # the fake board serves until its stdin closes, so hold that open explicitly
@@ -50,6 +65,8 @@ if [ -z "$dev" ] || [ ! -e "$dev" ]; then
     exit 1
 fi
 
-cd "$work"
-"$root/examples/kimventure.sh" --port "$dev" --baud 115200
+"$root/examples/load.py" --list
+"$root/examples/load.py" demo \
+    --catalogue "$work/programs.toml" --dir "$work/cache" \
+    --port "$dev" --baud 115200
 echo "example ok"

@@ -24,6 +24,14 @@ kimtape term  --port /dev/ttyUSB0     # raw terminal, ^] to quit
 kimtape info  game.ptp                # parse a tape without a board
 ```
 
+Programs distributed as raw binaries, Intel HEX or S-records — fig-FORTH,
+xKIM, MICRO-ADE among them — convert first:
+
+```sh
+kimtape convert forth.bin --at 2000 -o forth.ptp
+kimtape convert xKIM.hex -o xkim.ptp          # format read from the content
+```
+
 Press RS before running: the monitor sets its bit rate from the first carriage
 return it receives. Defaults are 1200 baud, 8N1, no flow control.
 
@@ -43,10 +51,24 @@ mon.load(Tape("game.ptp", open("game.ptp", "rb").read()))
 mon.go(0x0200)
 ```
 
-## Worked example
+## Examples
 
-`examples/kimventure.sh` fetches Bob Leedom's KIM-Venture and loads it into an
-expanded board. See [docs/kimventure.md](docs/kimventure.md).
+`examples/load.py` fetches any catalogued program from its own archive and
+loads it. The catalogue is [examples/programs.toml](examples/programs.toml);
+nothing is redistributed here.
+
+```sh
+examples/load.py --list
+examples/load.py microchess --port /dev/ttyUSB0    # chess in 1K, on the keypad
+examples/load.py kb9 --port /dev/ttyUSB0           # Microsoft BASIC, over this terminal
+examples/load.py kimventure --port /dev/ttyUSB0
+```
+
+Most catalogued programs talk over the same serial line you loaded them
+through: BASIC, FOCAL, Tiny BASIC, two chess programs, an RPN calculator, a
+text editor and a disassembler. See
+[docs/kim-software.md](docs/kim-software.md) for what else is out there, and
+[docs/kimventure.md](docs/kimventure.md) for the worked example in full.
 
 ## Documentation
 

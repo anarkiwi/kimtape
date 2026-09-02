@@ -6,23 +6,24 @@ around because it exercises everything: two tapes at different addresses, zero
 page data, expansion RAM, and a program that takes over the hardware the monitor
 was using.
 
-`examples/kimventure.sh` fetches it and loads it:
+`examples/load.py` fetches it and loads it:
 
 ```sh
-cd /some/scratch/directory
-/path/to/examples/kimventure.sh --port /dev/ttyUSB0
+examples/load.py kimventure --port /dev/ttyUSB0
 ```
+
+`examples/kimventure.sh` is a thin wrapper over the same thing.
 
 Press RS first. The run takes about two minutes at 1200 baud, most of it in the
 two verification passes.
 
 | Option | Effect |
 | --- | --- |
-| `-p, --port DEVICE` | serial port, default `$KIM_PORT` or `/dev/ttyUSB0` |
-| `-b, --baud RATE` | line rate, default 1200 |
-| `-n, --no-run` | load and verify, do not start |
-| `-f, --fetch` | re-download even if the tapes are present |
-| `-- ...` | everything after `--` goes to `kimtape` |
+| `--port DEVICE` | serial port, default `$KIM_PORT` or `/dev/ttyUSB0` |
+| `--baud RATE` | line rate, default 1200 |
+| `--no-run` | load and verify, do not start |
+| `--fetch-only` | download without touching the board |
+| `--dir DIR` | where downloads are kept and reused |
 
 ## What gets loaded
 

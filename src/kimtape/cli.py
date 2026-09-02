@@ -10,7 +10,7 @@ import termios
 from . import __version__
 from .monitor import SAL, Monitor
 from .port import Pacing, Port
-from .tape import Tape
+from .tape import Tape, read_image
 
 PROBE_ADDR = 0x1780  # 6532 RAM, present on every KIM-1
 PROBE_BYTES = bytes([0x00, 0x00, 0x10, 0x00])
@@ -22,6 +22,7 @@ examples:
   kimtape dump --port /dev/ttyUSB0 --range 0200-0774 -o game.ptp
   kimtape probe --port /dev/ttyUSB0
   kimtape term --port /dev/ttyUSB0
+  kimtape convert forth.bin --at 2000 -o forth.ptp
 
 The board is assumed to be on the machine running the tool.  Press RS before
 running: the monitor sets its bit rate from the first carriage return it sees.
@@ -64,6 +65,21 @@ def cmd_info(args):
     return 0
 
 
+def cmd_convert(args):
+    """Turn a binary, Intel HEX or S-record image into a paper tape."""
+    with open(args.image, "rb") as handle:
+        mem = read_image(handle.read(), args.at)
+    tape = Tape.from_memory(os.path.basename(args.output or "converted.ptp"), mem)
+    say("converted %s", tape)
+    if args.output:
+        with open(args.output, "wb") as out:
+            out.write(tape.text())
+    else:
+        sys.stdout.buffer.write(tape.text())
+        sys.stdout.buffer.flush()
+    return 0
+
+
 def cmd_load(args):
     """Send tapes, verify each one, and optionally start the program."""
     tapes = read_tapes(args.tapes)
@@ -75,6 +91,9 @@ def cmd_load(args):
         mon.sync(args.sync_tries)
         for tape in tapes:
             _load_one(mon, tape, args)
+        for addr, data in args.deposit or []:
+            mon.say("depositing %s at $%04X", data.hex(" ").upper(), addr)
+            mon.deposit(addr, data)
         if args.go is not None:
             mon.go(args.go)
     finally:
@@ -285,6 +304,17 @@ def hexaddr(text):
     return int(text, 16)
 
 
+def deposit_spec(text):
+    """Parse ADDR=BYTES, as in 00F1=DAFDFF, into (address, bytes)."""
+    addr, _, data = text.partition("=")
+    if not data:
+        raise argparse.ArgumentTypeError("expected ADDR=BYTES, e.g. 00F1=DAFDFF")
+    try:
+        return int(addr, 16), bytes.fromhex(data)
+    except ValueError as err:
+        raise argparse.ArgumentTypeError(str(err)) from None
+
+
 def hexrange(text):
     """Parse a hex range argument such as 0200-0774."""
     lo, _, hi = text.partition("-")
@@ -344,6 +374,14 @@ def build_parser():
     p.add_argument("--go", type=hexaddr, metavar="ADDR", help="run from this address")
     p.add_argument("--retries", type=int, default=2)
     p.add_argument("--no-verify", action="store_true")
+    p.add_argument(
+        "--deposit",
+        type=deposit_spec,
+        action="append",
+        metavar="ADDR=BYTES",
+        help="write bytes after loading, before running; repeatable.  KB-9 BASIC "
+        "needs 00F1=DAFDFF, for instance",
+    )
     p.set_defaults(func=cmd_load)
 
     p = sub.add_parser("dump", parents=[common], help="punch a memory range to a tape")
@@ -365,6 +403,16 @@ def build_parser():
     )
     p.set_defaults(func=cmd_term)
 
+    p = sub.add_parser(
+        "convert", help="make a paper tape from a binary, Intel HEX or S-record"
+    )
+    p.add_argument("image")
+    p.add_argument(
+        "--at", type=hexaddr, metavar="ADDR", help="load address, for a raw binary"
+    )
+    p.add_argument("-o", "--output", help="write here instead of stdout")
+    p.set_defaults(func=cmd_convert)
+
     p = sub.add_parser("info", help="parse tapes and report their extents")
     p.add_argument("tapes", nargs="+")
     p.set_defaults(func=cmd_info)
@@ -374,4 +422,8 @@ def build_parser():
 def main(argv=None):
     """Parse arguments and dispatch; returns a process exit code."""
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except (OSError, ValueError) as err:
+        # a malformed tape or an unreadable file is a user error, not a crash
+        raise SystemExit("kimtape: %s" % err) from None

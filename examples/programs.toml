@@ -1,0 +1,233 @@
+# Programs that kimtape can fetch and load.  Nothing is redistributed here:
+# each entry points at the archive its author or curator publishes.
+#
+#   io      "tty" if you use it over the serial line after loading,
+#           "keypad" if it drives the LED display and hex keypad instead
+#   start   address to run from, hex
+#   ram     what the board needs beyond the stock 1K
+#   tapes   url, or archive + member; add "at" for a raw binary's load address
+#
+# Extents were read from the tape records themselves; kimtape info will
+# confirm them against what you download.
+
+[kimventure]
+title = "KIM-Venture"
+author = "Bob Leedom, 1979"
+description = "Colossal Cave style adventure in 1K, played on six digits"
+io = "keypad"
+start = "0200"
+ram = "expansion RAM through $07FF"
+source = "https://github.com/markbush/KIM-Venture"
+notes = """
+Remove the TTY link (application connector V to 21) before playing: the game
+scans the keypad itself and reads that shorted position as a stuck key.
+Scoring: ST, then AD 0600 GO.  ST again and AD 0200 GO rejoins the game."""
+tapes = [
+  { url = "https://raw.githubusercontent.com/markbush/KIM-Venture/main/tape-files/Venture-ZeroPage.ptp" },
+  { url = "https://raw.githubusercontent.com/markbush/KIM-Venture/main/tape-files/Venture-Full.ptp" },
+]
+
+[microchess]
+title = "Microchess"
+author = "Peter Jennings, 1976"
+description = "Chess in 1K, the first home computer game sold commercially"
+io = "keypad"
+start = "0000"
+source = "https://github.com/jefftranter/6502/tree/master/asm/KIM-1/Microchess"
+tapes = [
+  { url = "https://raw.githubusercontent.com/jefftranter/6502/master/asm/KIM-1/Microchess/microchess.ptp" },
+]
+
+[hexpawn]
+title = "Hexpawn"
+author = "Bob Leedom, 1979"
+description = "Three by three pawn game that learns from every game it loses"
+io = "keypad"
+start = "0100"
+source = "https://github.com/netzherpes/HexPawn_KIM1"
+tapes = [
+  { url = "https://raw.githubusercontent.com/netzherpes/HexPawn_KIM1/main/hexpawn.ptp" },
+]
+
+[kb9]
+title = "Microsoft KB-9 BASIC"
+author = "Microsoft for MOS Technology, 1977"
+description = "The 6502 BASIC, nine digit floating point, over the terminal"
+io = "tty"
+start = "2000"
+ram = "16K from $2000"
+source = "http://retro.hansotten.nl/6502-sbc/kim-1-manuals-and-software/kim-1-software/microsoft-kb-9-basic/kb-9-downloads/"
+notes = """
+Answer MEMORY SIZE and TERMINAL WIDTH with Enter, and WANT SIN-COS-ATN with Y.
+The deposited bytes are the monitor's saved P and stack pointer: $00 clears
+decimal mode, $FF resets the stack.  The loader has already written them."""
+deposits = [{ addr = "00F1", bytes = "00FF" }]
+tapes = [
+  { archive = "http://retro.hansotten.nl/uploads/files/kb9v2.zip", member = "kb9V2.ptp" },
+]
+
+[kb6]
+title = "Microsoft KB-6 BASIC"
+author = "Microsoft for MOS Technology, 1977"
+description = "The same BASIC with six digit floating point, and smaller"
+io = "tty"
+start = "2000"
+ram = "16K from $2000"
+source = "http://retro.hansotten.nl/6502-sbc/kim-1-manuals-and-software/kim-1-software/microsoft-kb-9-basic/kb-9-downloads/"
+deposits = [{ addr = "00F1", bytes = "00FF" }]
+tapes = [
+  { archive = "http://retro.hansotten.nl/uploads/files/kb6v2.zip", member = "kb6V2.ptp" },
+]
+
+[focal]
+title = "FOCAL-65"
+author = "Wayne Wall, Denver 6502 Group"
+description = "DEC's FOCAL language, nine digit floating point, over the terminal"
+io = "tty"
+start = "2000"
+ram = "8K from $2000"
+source = "http://retro.hansotten.nl/6502-sbc/focal-65-v3d/"
+notes = "A teletype era build: avoid Backspace and control keys."
+tapes = [
+  { archive = "http://retro.hansotten.nl/uploads/focal/focal-65%20for%20KIM-1.zip", member = "kfocal.ptp" },
+]
+
+[tinybasic]
+title = "Tiny BASIC (low)"
+author = "Tom Pittman, 1976"
+description = "Tiny BASIC in low memory, patched for a modern terminal"
+io = "tty"
+start = "0200"
+ram = "4K, program space from $0B00"
+source = "http://retro.hansotten.nl/6502-sbc/kim-1-manuals-and-software/kim-1-software/tiny-basic/"
+notes = "The patched build adds a prompt and backspace handling."
+tapes = [
+  { archive = "http://retro.hansotten.nl/uploads/tinybasic/Tiny%20Basic%20KIM-1%20binaries%20sources%20.zip", member = "patched practical binaries/TinyBasic KIM 0200.pap" },
+]
+
+[tinybasic-high]
+title = "Tiny BASIC (high)"
+author = "Tom Pittman, 1976"
+description = "The same interpreter relocated above the expansion boundary"
+io = "tty"
+start = "2000"
+ram = "4K from $2000, program space from $2900"
+source = "http://retro.hansotten.nl/6502-sbc/kim-1-manuals-and-software/kim-1-software/tiny-basic/"
+tapes = [
+  { archive = "http://retro.hansotten.nl/uploads/tinybasic/Tiny%20Basic%20KIM-1%20binaries%20sources%20.zip", member = "patched practical binaries/TinyBasic KIM 2000.pap" },
+]
+
+[qchess]
+title = "Q-Chess (terminal build)"
+author = "circa 1980, TTY adaptation by Fer Weber, 1981"
+description = "Chess played over the terminal rather than the LED display"
+io = "tty"
+start = "2380"
+ram = "16K from $2000"
+source = "http://retro.hansotten.nl/6502-sbc/kim-1-manuals-and-software/kim-1-software/q-chess/"
+notes = """
+Warm start is $2500.  The computer can think for minutes on end; that is the
+program working, not a hung link."""
+tapes = [
+  { archive = "http://retro.hansotten.nl/uploads/qchess/QCHESSBINARY.zip", member = "QCHESSTTY.ptp" },
+]
+
+[usurpator]
+title = "Usurpator II"
+author = "H. G. Muller, 1983"
+description = "Chess from the book Computerschaak; moves typed as E2E4"
+io = "tty"
+start = "2000"
+ram = "8K from $2000, plus $32C0-$33FF"
+source = "http://retro.hansotten.nl/6502-sbc/kim-1-manuals-and-software/kim-1-software/usurpator/"
+tapes = [
+  { archive = "http://retro.hansotten.nl/uploads/files/usurpatorII.zip", member = "Usurpator II KIM-1/usurpator II KIM.pap" },
+]
+
+[huey]
+title = "HUEY"
+author = "Don Rindsberg, 1977; reconstructed by C. R. Bond"
+description = "Reverse Polish scientific calculator driven from the terminal"
+io = "tty"
+start = "2000"
+ram = "4K from $2000"
+source = "https://github.com/netzherpes/HUEY-for-KIM-1"
+tapes = [
+  { url = "https://raw.githubusercontent.com/netzherpes/HUEY-for-KIM-1/main/HUEY_%242000.PTP" },
+]
+
+[life]
+title = "Game of Life"
+author = "Conway, adapted by Theodore E. Bridge, 1980"
+description = "Life generations printed to the terminal"
+io = "tty"
+start = "2000"
+ram = "4K from $2000"
+source = "https://github.com/netzherpes/KIM-1-Game-of-Life"
+notes = "Starting configuration is set at $2001, $2005 and $2009."
+tapes = [
+  { url = "https://raw.githubusercontent.com/netzherpes/KIM-1-Game-of-Life/main/GOL.pap" },
+]
+
+[banner]
+title = "Banner"
+author = "Jim Zuber"
+description = "Prints large ASCII banner lettering to the terminal"
+io = "tty"
+start = "2000"
+ram = "4K from $2000"
+source = "https://github.com/netzherpes/Banner-for-KIM-1"
+tapes = [
+  { url = "https://raw.githubusercontent.com/netzherpes/Banner-for-KIM-1/main/Banner.pap" },
+  { url = "https://raw.githubusercontent.com/netzherpes/Banner-for-KIM-1/main/Bannerdata.pap" },
+]
+
+[ledip]
+title = "LEDIP"
+author = "Kiumi Akingbehin, Dr. Dobb's Journal"
+description = "Line oriented text editor over the terminal"
+io = "tty"
+start = "2000"
+ram = "4K from $2000"
+source = "https://github.com/netzherpes/LEDIP"
+notes = "Warm start is $203C."
+tapes = [
+  { url = "https://raw.githubusercontent.com/netzherpes/LEDIP/main/ledip_c.ptp" },
+]
+
+[prdis]
+title = "Printing Disassembler V3"
+author = "Hans Otten, 1982; revived by Glen Deas, 2023"
+description = "Paginated 6502 disassembly to a terminal or printer"
+io = "tty"
+start = "B000"
+ram = "RAM at $B000, variables at $0200"
+source = "http://retro.hansotten.nl/6502-sbc/kim-1-manuals-and-software/kim-1-software/printing-disassembler/"
+tapes = [
+  { archive = "http://retro.hansotten.nl/uploads/prdis/PRDISV3.zip", member = "PRDISV3.pap" },
+]
+
+[demo]
+title = "50 Years KIM-1 Demo"
+author = "Michael Kraemer, 2026"
+description = "ANSI terminal demo written for the KIM-1's fiftieth birthday"
+io = "tty"
+start = "2C00"
+ram = "8K from $2000"
+source = "https://github.com/netzherpes/KIM1-Demo"
+tapes = [
+  { url = "https://raw.githubusercontent.com/netzherpes/KIM1-Demo/main/crunched_2C00.ptp" },
+]
+
+[2ksa]
+title = "2K Symbolic Assembler"
+author = "Robert Ford Denison, circa 1980"
+description = "Line editor and symbolic assembler together in two kilobytes"
+io = "tty"
+start = "23B8"
+ram = "4K from $2000"
+source = "https://github.com/jefftranter/6502/tree/master/asm/2ksa"
+notes = "The low build at $0200 starts from $05B8 instead."
+tapes = [
+  { archive = "http://retro.hansotten.nl/uploads/files/2ksa%20source%20binary.zip", member = "2ksa-kim-2000.ptp" },
+]
