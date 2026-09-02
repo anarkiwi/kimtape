@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Program images fetched at run time; not ours to redistribute
+*.ptp
+*.hex
