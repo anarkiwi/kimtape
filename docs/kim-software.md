@@ -88,6 +88,27 @@ Hypertape, Memory Test, Mini Dis, Branch, Relocate, Sort.
 Usurpator II takes moves as `E2E4` over the terminal, which makes it the easiest
 chess program to play on a board with no display fitted.
 
+## Interactive fiction
+
+KIM-Venture is the only adventure written for the machine itself, and it uses
+the LED display rather than the terminal. For anything larger the route is
+CP/M-65.
+
+**z65**, David Given's Z-machine version 3 interpreter, runs as a CP/M-65
+program and ships with the freeware adventure Moonglow; its README reports
+Zork I-III, Mini-Zork, Planetfall and Hollywood Hijinx working. The KIM-1
+CP/M-65 ports are TTY only, so the whole thing is played over the serial line.
+
+It needs at least 32K from $2000, 56K preferred, plus RAM filling the
+$0400-$13FF hole, and mass storage: an SD card, the Corsham SD Shield, a 1541
+through xkim1541, or an MTU K-1013 controller. Boot loaders for each are
+published at [davidgiven/cpm65](https://github.com/davidgiven/cpm65).
+
+Only the boot loader is a paper tape, and it is in the catalogue as `cpm65`.
+Everything else lives on the disk image, necessarily so: a Z-code story file of
+84KB is around 200KB of tape records, close to an hour at 1200 baud, and larger
+than the address space it would have to fit into.
+
 ## Development tools
 
 | Program | Author | Extent | Start | Tape | Source |
