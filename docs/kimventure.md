@@ -64,10 +64,36 @@ Restore by loading `savegame.ptp` in place of `Venture-ZeroPage.ptp`, then
 
 ## Provenance
 
-The game is © Robert Leedom and is not redistributed here. The script fetches it
-from Mark Bush's [KIM-Venture repository](https://github.com/markbush/KIM-Venture),
-falling back to the copy in [Hans Otten's archive](http://retro.hansotten.nl/6502-sbc/kim-1-manuals-and-software/kim-1-software/kim-venture/),
-which also hosts the manual, the game instructions and a map.
+The game is © Robert Leedom and is not redistributed here. The catalogue fetches
+it from Mark Bush's [KIM-Venture repository](https://github.com/markbush/KIM-Venture).
+[Hans Otten's archive](http://retro.hansotten.nl/6502-sbc/kim-1-manuals-and-software/kim-1-software/kim-venture/)
+hosts the manual, the game instructions and a map.
+
+### Use Mark Bush's tapes, not the other reconstruction
+
+The original listing was hand assembled and printed, so every version in
+circulation is an OCR reconstruction of a scan. Two exist, and they are not
+interchangeable. Decoding both to memory images and comparing them:
+
+| Part | Result |
+| --- | --- |
+| ZeroPage, Extra | byte identical |
+| Game | 3 bytes differ |
+| Scoring | 30 bytes differ |
+
+Two of the three differences in Game are the benign assembler artefact Bush
+documents, at $0186: `INC` assembled zero page plus a `NOP` against the same
+instruction assembled absolute. Same length, same effect.
+
+The third is a defect. At $028F the older tape has $1C where $10 belongs,
+turning a branch into an undocumented three byte NMOS opcode that swallows the
+two bytes after it and desynchronises everything downstream.
+
+In Scoring, $01D9-$01F7 is zeros in the older tape where the newer one carries
+a subroutine, so its scorer is incomplete.
+
+Both faults are consistent with misreads of the printed listing. Bush's tapes
+are the ones to use, which is what the catalogue points at.
 
 Note that the full build is marked a work in progress by its author. If it
 misbehaves, the original three-part version — `Venture-ZeroPage`, `Venture-Game`
