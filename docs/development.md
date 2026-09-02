@@ -3,9 +3,9 @@
 ```sh
 pip install -e ".[dev]"
 pytest                      # xdist, coverage, no hardware needed
-black src tests
-pylint src/kimtape tests
-tests/run_example.sh        # examples/kimventure.sh against a fake board
+black src tests examples
+pylint src/kimtape tests examples
+tests/run_example.sh        # examples/load.py against a fake board
 ```
 
 ## The fake board
@@ -22,6 +22,19 @@ board.
 
 It takes one argument, a record number to drop, which drives the retry tests;
 `-1` drops every record.
+
+## The catalogue
+
+`examples/programs.toml` lists programs, where their tapes come from, where
+they load, and whether they are used from the terminal or the keypad. Adding a
+program means adding an entry, not writing a script. A tape entry is either a
+`url`, or an `archive` plus the `member` to take from it; add `at` when the
+file is a raw binary that carries no address of its own, and the loader
+converts it.
+
+`test_catalogue_entries_are_complete` checks the shape of every entry. It does
+not fetch anything, so a URL that rots will not be caught by CI — check with
+`examples/load.py <name> --fetch-only`.
 
 ## Test fixtures
 

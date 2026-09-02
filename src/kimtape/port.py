@@ -57,6 +57,10 @@ class Port:
         self.pacing = pacing or Pacing()
         if self.pacing.char_delay is None:
             self.pacing.char_delay = self.char_time
+        # quiet detection cannot be tighter than the scheduler can wake us: at
+        # 1200 baud four character times dominate, but on a fast link it would
+        # otherwise call the line idle before the far end had begun replying
+        self.quiet_time = max(4 * self.char_time, 0.005)
         self.echo_timeout = max(0.5, 40 * self.char_time)
         self.trace = trace
         self.rx = bytearray()
@@ -122,7 +126,7 @@ class Port:
     def drain(self, limit=3.0):
         """Read until the line has stayed quiet for a few character times."""
         deadline = time.time() + limit
-        while time.time() < deadline and self.poll(4 * self.char_time):
+        while time.time() < deadline and self.poll(self.quiet_time):
             pass
 
     def write(self, data):

@@ -85,3 +85,21 @@ def sample_tape(path, addr, size, seed=1):
     with open(path, "wb") as out:
         out.write(Tape.from_memory(os.path.basename(path), mem).text())
     return mem
+
+
+def ihex(records):
+    """Assemble Intel HEX text from (addr, kind, data) triples."""
+    out = []
+    for addr, kind, data in records:
+        body = bytes([len(data), addr >> 8, addr & 0xFF, kind]) + data
+        out.append(b":" + (body + bytes([(-sum(body)) & 0xFF])).hex().upper().encode())
+    return b"\n".join(out)
+
+
+def srec(records):
+    """Assemble S1 records from (addr, data) pairs, with an S9 terminator."""
+    out = []
+    for addr, data in records:
+        body = bytes([len(data) + 3, addr >> 8, addr & 0xFF]) + data
+        out.append(b"S1" + (body + bytes([~sum(body) & 0xFF])).hex().upper().encode())
+    return b"\n".join(out + [b"S9030000FC"])

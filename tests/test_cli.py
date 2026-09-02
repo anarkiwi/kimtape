@@ -5,7 +5,7 @@ import pty
 import subprocess
 import sys
 
-from conftest import BAUD, Board, sample_tape
+from conftest import BAUD, Board, ihex, sample_tape
 
 from kimtape import Tape
 
@@ -147,3 +147,46 @@ def test_dump_of_undecoded_range_reads_as_erased(cli, board):
     tape = Tape("out.ptp", out.encode())
     assert tape.span == (0x2000, 0x2010)
     assert set(tape.mem.values()) == {0xFF}
+
+
+def test_convert_binary_to_tape(cli, tmp_path):
+    """A raw image, of the kind fig-FORTH and xKIM ship as."""
+    binary = tmp_path / "prog.bin"
+    binary.write_bytes(bytes(range(64)))
+    out = str(tmp_path / "prog.ptp")
+    code, _, err = cli("convert", str(binary), "--at", "2000", "-o", out)
+    assert code == 0, err
+    with open(out, "rb") as tape:
+        mem = Tape("prog.ptp", tape.read()).mem
+    assert mem == {0x2000 + i: i for i in range(64)}
+
+
+def test_convert_binary_without_address_is_refused(cli, tmp_path):
+    binary = tmp_path / "prog.bin"
+    binary.write_bytes(b"\x01\x02")  # no leading ; : or S, so it is raw
+    code, _, err = cli("convert", str(binary))
+    assert code != 0
+    assert "no address of its own" in err
+
+
+def test_convert_intel_hex_to_stdout(cli, tmp_path):
+    image = tmp_path / "prog.hex"
+    image.write_bytes(ihex([(0x2000, 0, b"\xaa\xbb"), (0x0000, 1, b"")]))
+    code, out, err = cli("convert", str(image))
+    assert code == 0, err
+    assert Tape("out.ptp", out.encode()).mem == {0x2000: 0xAA, 0x2001: 0xBB}
+
+
+def test_malformed_tape_reads_as_an_error(cli, tmp_path):
+    """A bad tape is a user error, so no traceback should reach the terminal."""
+    bad = tmp_path / "bad.ptp"
+    bad.write_bytes(b";020200AABB0000\n")
+    code, _, err = cli("info", str(bad))
+    assert code != 0
+    assert "kimtape: " in err and "Traceback" not in err
+
+
+def test_missing_file_reads_as_an_error(cli):
+    code, _, err = cli("info", "/nonexistent/tape.ptp")
+    assert code != 0
+    assert "kimtape: " in err and "Traceback" not in err
