@@ -231,3 +231,33 @@ notes = "The low build at $0200 starts from $05B8 instead."
 tapes = [
   { archive = "http://retro.hansotten.nl/uploads/files/2ksa%20source%20binary.zip", member = "2ksa-kim-2000.ptp" },
 ]
+
+[cpm65]
+title = "CP/M-65 boot loader"
+author = "David Given"
+description = "Boots CP/M-65 from SD, which carries the z65 Z-machine interpreter"
+io = "tty"
+start = "0200"
+ram = "32K from $2000, 56K preferred, plus K1-K4 filling $0400-$13FF"
+source = "https://github.com/davidgiven/cpm65"
+notes = """
+Only the boot loader is a paper tape.  CP/M-65 itself, the z65 Z-machine and
+its story files live on the SD card image in the same archive, which is why
+the download is 34MB for a 952 byte tape.
+
+z65 is a Z-machine version 3 interpreter and ships with the freeware
+adventure Moonglow; its README reports Zork I-III, Mini-Zork, Planetfall and
+Hollywood Hijinx working.  Run it as: Z65 MOONGLOW.Z3
+
+Needs an SD card wired per Ryan Roth's sdcard6502.  The same release carries
+boot loaders for the Corsham SD Shield, a 1541 over xkim1541, and the MTU
+K-1013 controller; kim-1-sdshield.zip, kim-1-iec.zip and kim-1-k1013.zip
+alongside this one.  There is also bootsd-kimrom.bin for burning into free
+ROM space at $1AA0 instead of loading a tape each time.
+
+A story file is far too large to load as paper tape: 84KB of Z-code is around
+200KB of tape records, close to an hour at 1200 baud, and it would not fit in
+the address space anyway.  That is what the SD card is for."""
+tapes = [
+  { archive = "https://github.com/davidgiven/cpm65/releases/download/dev/kim-1-sdcard.zip", member = "bootsd.pap" },
+]
