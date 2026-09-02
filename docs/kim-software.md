@@ -90,9 +90,10 @@ chess program to play on a board with no display fitted.
 
 ## Interactive fiction
 
-KIM-Venture is the only adventure written for the machine itself, and it uses
-the LED display rather than the terminal. For anything larger the route is
-CP/M-65.
+KIM-Venture is the only text adventure written for the machine itself, and it
+uses the LED display rather than the terminal. The nearest modern relative is
+MOStermind (hkzlab, 2026), Mastermind over the terminal, which is in the
+catalogue. For anything larger the route is CP/M-65.
 
 **z65**, David Given's Z-machine version 3 interpreter, runs as a CP/M-65
 program and ships with the freeware adventure Moonglow; its README reports
