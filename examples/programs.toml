@@ -261,3 +261,15 @@ the address space anyway.  That is what the SD card is for."""
 tapes = [
   { archive = "https://github.com/davidgiven/cpm65/releases/download/dev/kim-1-sdcard.zip", member = "bootsd.pap" },
 ]
+
+[mostermind]
+title = "MOStermind"
+author = "hkzlab, 2026"
+description = "Mastermind played over the terminal, guesses and scores as text"
+io = "tty"
+start = "2000"
+ram = "2K from $2000"
+source = "https://codeberg.org/hkzlab/MOStermind_KIM-1"
+tapes = [
+  { url = "https://codeberg.org/hkzlab/MOStermind_KIM-1/releases/download/v1.0.0/mostermind.ptp" },
+]
