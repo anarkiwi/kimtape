@@ -6,6 +6,9 @@ import re
 import select
 import sys
 import termios
+import urllib.error
+import urllib.parse
+import urllib.request
 
 from . import __version__
 from .monitor import SAL, Monitor
@@ -19,6 +22,7 @@ DESCRIPTION = "Load, dump and run programs on a KIM-1 over a serial line."
 EPILOG = """\
 examples:
   kimtape load --port /dev/ttyUSB0 zp.ptp game.ptp --go 0200
+  kimtape load --port /dev/ttyUSB0 https://example.com/game.ptp --go 0200
   kimtape dump --port /dev/ttyUSB0 --range 0200-0774 -o game.ptp
   kimtape probe --port /dev/ttyUSB0
   kimtape term --port /dev/ttyUSB0
@@ -43,13 +47,23 @@ def open_port(args):
     )
 
 
-def read_tapes(paths):
-    """Parse each tape file, failing on a bad checksum."""
-    tapes = []
-    for path in paths:
-        with open(path, "rb") as handle:
-            tapes.append(Tape(os.path.basename(path), handle.read()))
-    return tapes
+def read_source(source):
+    """Return (name, bytes) of a file path or an http(s) URL."""
+    url = urllib.parse.urlsplit(source)
+    if url.scheme not in ("http", "https"):
+        with open(source, "rb") as handle:
+            return os.path.basename(source), handle.read()
+    try:
+        with urllib.request.urlopen(source, timeout=60) as response:  # nosec B310
+            blob = response.read()
+    except (urllib.error.URLError, OSError) as exc:
+        raise SystemExit("kimtape: cannot fetch %s: %s" % (source, exc)) from exc
+    return os.path.basename(urllib.parse.unquote(url.path)) or url.netloc, blob
+
+
+def read_tapes(sources):
+    """Parse each tape file or URL, failing on a bad checksum."""
+    return [Tape(*read_source(source)) for source in sources]
 
 
 def say(fmt, *args):
@@ -67,8 +81,7 @@ def cmd_info(args):
 
 def cmd_convert(args):
     """Turn a binary, Intel HEX or S-record image into a paper tape."""
-    with open(args.image, "rb") as handle:
-        mem = read_image(handle.read(), args.at)
+    mem = read_image(read_source(args.image)[1], args.at)
     tape = Tape.from_memory(os.path.basename(args.output or "converted.ptp"), mem)
     say("converted %s", tape)
     if args.output:
@@ -370,7 +383,7 @@ def build_parser():
     p = sub.add_parser(
         "load", parents=[common], help="send tapes, verify, optionally run"
     )
-    p.add_argument("tapes", nargs="*")
+    p.add_argument("tapes", nargs="*", help="tape files or http(s) URLs")
     p.add_argument("--go", type=hexaddr, metavar="ADDR", help="run from this address")
     p.add_argument("--retries", type=int, default=2)
     p.add_argument("--no-verify", action="store_true")
@@ -406,7 +419,7 @@ def build_parser():
     p = sub.add_parser(
         "convert", help="make a paper tape from a binary, Intel HEX or S-record"
     )
-    p.add_argument("image")
+    p.add_argument("image", help="file or http(s) URL")
     p.add_argument(
         "--at", type=hexaddr, metavar="ADDR", help="load address, for a raw binary"
     )
@@ -414,7 +427,7 @@ def build_parser():
     p.set_defaults(func=cmd_convert)
 
     p = sub.add_parser("info", help="parse tapes and report their extents")
-    p.add_argument("tapes", nargs="+")
+    p.add_argument("tapes", nargs="+", help="tape files or http(s) URLs")
     p.set_defaults(func=cmd_info)
     return ap
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kimtape"
-version = "0.1.1"
+version = "0.1.2"
 description = "Paper tape loader for the MOS Technology KIM-1 and its replicas"
 readme = "README.md"
 license = "Apache-2.0"
