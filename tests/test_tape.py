@@ -123,3 +123,12 @@ def test_truncated_end_record_is_accepted():
     text = Tape.from_memory("t.ptp", {0x0200: 0x42}).text()
     body = text.split(b";00", maxsplit=1)[0]
     assert Tape("t.ptp", body + b";00\r\n").mem == {0x0200: 0x42}
+
+
+def test_end_record_counts_past_255():
+    mem = {0x2000 + i: i & 0xFF for i in range(24 * 300)}
+    text = Tape.from_memory("t.ptp", mem).text()
+    assert text.endswith(b";00012C012C\r\n")
+    assert Tape("t.ptp", text).mem == mem
+    with pytest.raises(ValueError, match="bad checksum"):
+        Tape("t.ptp", text.replace(b";00012C012C", b";00012C012D"))
