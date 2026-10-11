@@ -32,11 +32,12 @@ The ROM monitor accepts uppercase only:
 | `DD.` | deposit a byte, advance |
 | `CR` | advance, show |
 | `L` | load a paper tape |
-| `Q` | punch `$17F5`/`$17F6` through `$17F7`/`$17F8` |
+| `Q` | punch from the open address through `$17F7`/`$17F8` |
 | `G` | execute from the open address |
 
-`$17F5`–`$17F8` are the start and end address vectors in 6532 RAM: low byte
-first, then high. `kimtape` deposits them before every `Q`.
+`$17F7`/`$17F8` is the end address in 6532 RAM, low byte first. `Q` starts
+from whichever address is open, not from `$17F5`/`$17F6`, so `kimtape` deposits
+the end address and then opens the start before every `Q`.
 
 ## Why writes are paced
 
