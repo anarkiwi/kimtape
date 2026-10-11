@@ -62,7 +62,10 @@ class Tape:
                 "%s: record at $%04X holds %d of %d bytes"
                 % (self.name, addr, len(data), count)
             )
-        if checksum(count, addr, data) != int(match.group(4), 16):
+        # the end record carries the record count in place of both the
+        # address and the checksum
+        want = addr if count == 0 else checksum(count, addr, data)
+        if want != int(match.group(4), 16):
             raise ValueError("%s: bad checksum in record at $%04X" % (self.name, addr))
         return count, addr, data
 
