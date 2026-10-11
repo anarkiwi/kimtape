@@ -16,6 +16,13 @@ from dataclasses import dataclass
 BITS = 10  # 8N1: start + 8 data + stop
 
 
+def _speed(baud):
+    try:
+        return getattr(termios, "B%d" % baud)
+    except AttributeError:
+        raise SystemExit("kimtape: unsupported baud rate %d" % baud) from None
+
+
 @dataclass
 class Pacing:
     """How fast characters may be pushed at the monitor.
@@ -32,14 +39,11 @@ class Pacing:
     echo: bool = True
 
 
-class Port:
+class Port:  # pylint: disable=too-many-instance-attributes
     """A raw 8N1 serial port.  Standard library only, no pyserial."""
 
     def __init__(self, dev, baud, pacing=None, trace=False):
-        try:
-            speed = getattr(termios, "B%d" % baud)
-        except AttributeError:
-            raise SystemExit("kimtape: unsupported baud rate %d" % baud) from None
+        speed = _speed(baud)
         try:
             self.fd = os.open(dev, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
         except OSError as err:
@@ -53,15 +57,11 @@ class Port:
             raise SystemExit(
                 "kimtape: %s is not a serial port (%s)" % (dev, err.args[-1])
             ) from None
-        self.char_time = BITS / float(baud)
+        self.baud = baud
+        self._timing(baud)
         self.pacing = pacing or Pacing()
         if self.pacing.char_delay is None:
             self.pacing.char_delay = self.char_time
-        # quiet detection cannot be tighter than the scheduler can wake us: at
-        # 1200 baud four character times dominate, but on a fast link it would
-        # otherwise call the line idle before the far end had begun replying
-        self.quiet_time = max(4 * self.char_time, 0.005)
-        self.echo_timeout = max(0.5, 40 * self.char_time)
         self.trace = trace
         self.rx = bytearray()
 
@@ -75,15 +75,29 @@ class Port:
         """Pause after each tape record when there is no echo to clock against."""
         return self.pacing.line_delay
 
-    def _configure(self, speed):
+    def _timing(self, baud, stop_bits=1):
+        self.char_time = (BITS + stop_bits - 1) / float(baud)
+        # quiet detection cannot be tighter than the scheduler can wake us: at
+        # 1200 baud four character times dominate, but on a fast link it would
+        # otherwise call the line idle before the far end had begun replying
+        self.quiet_time = max(4 * self.char_time, 0.005)
+        self.echo_timeout = max(0.5, 40 * self.char_time)
+
+    def _configure(self, speed, stop_bits=1, when=termios.TCSANOW, flush=None):
         cc = list(termios.tcgetattr(self.fd)[6])
         cc[termios.VMIN], cc[termios.VTIME] = 0, 0
-        termios.tcsetattr(
-            self.fd,
-            termios.TCSANOW,
-            [0, 0, termios.CS8 | termios.CREAD | termios.CLOCAL, 0, speed, speed, cc],
-        )
-        termios.tcflush(self.fd, termios.TCIOFLUSH)
+        cflag = termios.CS8 | termios.CREAD | termios.CLOCAL
+        if stop_bits == 2:
+            cflag |= termios.CSTOPB
+        termios.tcsetattr(self.fd, when, [0, 0, cflag, 0, speed, speed, cc])
+        termios.tcflush(self.fd, termios.TCIOFLUSH if flush is None else flush)
+
+    def set_rate(self, baud, stop_bits=1):
+        """Change the bit rate once what is queued has gone, dropping input."""
+        self._configure(_speed(baud), stop_bits, termios.TCSADRAIN, termios.TCIFLUSH)
+        self.baud = baud
+        self._timing(baud, stop_bits)
+        self.rx = bytearray()
 
     @staticmethod
     def show(data):
@@ -146,6 +160,17 @@ class Port:
             os.write(self.fd, data[i : i + 1])
             self._trace("-->", data[i : i + 1])
             self.poll(0)
+
+    def send(self, data):
+        """Send bytes as fast as the line takes them, unpaced."""
+        view = memoryview(data)
+        while view:
+            select.select([], [self.fd], [], 1.0)
+            try:
+                view = view[os.write(self.fd, view) :]
+            except BlockingIOError:
+                continue
+        self._trace("-->", data)
 
     def take(self):
         """Return everything received so far and clear the buffer."""

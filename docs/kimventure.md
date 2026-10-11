@@ -14,8 +14,9 @@ examples/load.py kimventure --port /dev/ttyUSB0
 
 `examples/kimventure.sh` is a thin wrapper over the same thing.
 
-Press RS first. The run takes about two minutes at 1200 baud, most of it in the
-two verification passes.
+Press RS first. The run takes about half a minute, most of it putting the
+XMODEM loader in at 1200 baud; with `-- --hex` it takes about two minutes, most
+of that in the two verification passes.
 
 | Option | Effect |
 | --- | --- |

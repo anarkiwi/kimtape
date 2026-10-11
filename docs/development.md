@@ -1,12 +1,28 @@
 # Development
 
 ```sh
+sudo apt-get install cc65   # ca65/ld65, for the XMODEM stub
 pip install -e ".[dev]"
 pytest                      # xdist, coverage, no hardware needed
-black src tests examples
-pylint src/kimtape tests examples
+black src tests examples stub
+pylint src/kimtape tests examples stub
 tests/run_example.sh        # examples/load.py against a fake board
 ```
+
+## The XMODEM stub
+
+`stub/xmodem.s` is the 6502 receiver. `stub/build.py` assembles it for each
+rate at two code and two data origins, finds the relocations from what moved,
+and writes `src/kimtape/stub.py`; `stub/build.py --check` (run in CI) fails if
+the committed bytes are not what the source assembles to. Run the build after
+any change to the source.
+
+`tests/kimsim.py` runs it on py65 with the TTY lines modelled bit by bit in
+CPU cycles: a host UART at any rate and error drives port A bit 7, and port B
+bit 0, ANDed with the input as the KIM-1 echo does, is decoded back. The stub
+tests use it directly; `tests/measure.py tolerance` and
+`tests/measure.py throughput` produce the tables in
+[protocol.md](protocol.md#the-xmodem-loader).
 
 ## The fake board
 
@@ -21,7 +37,13 @@ loosely is a place where the tests will agree with each other and disagree with 
 board.
 
 It takes one argument, a record number to drop, which drives the retry tests;
-`-1` drops every record.
+`-1` drops every record. A second, `mute`, makes it stop answering after the
+reset; `nostub`, makes a started XMODEM stub never answer.
+
+`G` at an address holding a kimtape stub runs the stub on `tests/kimsim.py`,
+bridged to the pty in real time, so `load` is tested end to end through the
+real 6502 code; when the stub returns to `$1C4F` the fake carries on as the
+monitor.
 
 ## The catalogue
 

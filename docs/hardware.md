@@ -9,6 +9,25 @@ to set its own bit rate, and `kimtape sync` sends it.
 Higher rates work on some boards — the monitor derives its divisor from that
 first character — but 1200 is what the ROM was written around.
 
+`load` talks to the monitor at that rate only long enough to put its XMODEM
+loader in; the program itself goes at 19200 baud, timed by the 6502's own
+clock rather than the monitor's measurement. Every common USB to TTL adapter
+(FTDI, CP210x, CH340, PL2303) makes 9600, 19200 and 38400 within a fraction of
+a percent, and the loader tolerates about 4% either way (see
+[protocol.md](protocol.md#bit-timing)), so a board on a 1 MHz crystal needs
+nothing set. If the load stops at `xmodem at 19200 baud`:
+
+| Try | When |
+| --- | --- |
+| nothing: kimtape retries at 9600, then falls back to hex | the usual case is handled |
+| `--baud-fast 9600` | 19200 fails every time; skips the wasted attempt |
+| `--hex` | the board is not at 1 MHz, or anything else between it and the host is |
+| `--stub-at ADDR` | the loader's automatic placement picks RAM that is not there |
+
+An FTDI adapter holds short replies for its latency timer, 16 ms by default,
+before passing them on; setting it to 1 ms makes each block's turnaround faster:
+`echo 1 | sudo tee /sys/bus/usb-serial/devices/ttyUSB0/latency_timer`.
+
 ## TTY mode
 
 The monitor only speaks over the serial line when it is in TTY mode, which is
@@ -73,4 +92,6 @@ that fits the unexpanded KIM-1 needs none of them.
 | no reply to anything | not in TTY mode, TX/RX swapped, or RS not pressed |
 | `KIM` appears but commands are ignored | characters arriving faster than the monitor can take them; see `kimtape probe` |
 | a range above $0400 reads back wrong or erased | that RAM is not decoded; check `SW4` and `SW5` position 1 |
+| `memory at $XXXX did not hold what was written` | the same, found by the XMODEM loader as it stores |
+| no reply after `xmodem at 19200 baud` | see [Serial line](#serial-line) above |
 | program loads but the keypad misbehaves | the TTY link is still fitted |

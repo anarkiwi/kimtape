@@ -96,7 +96,7 @@ def test_probe_reports_each_command(cli, board):
 
 def test_probe_gives_up_when_nothing_answers(cli):
     """A board that answers the reset and then goes deaf."""
-    board = Board(mute=True)
+    board = Board(mode="mute")
     try:
         code, _, err = cli("probe", "--port", board.dev, "--baud", BAUD)
     finally:

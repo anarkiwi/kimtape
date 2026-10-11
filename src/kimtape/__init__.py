@@ -12,7 +12,7 @@ from .tape import (
     read_srec,
 )
 
-__version__ = "0.1.2"
+__version__ = "0.2.0"
 __all__ = [
     "Monitor",
     "Pacing",
