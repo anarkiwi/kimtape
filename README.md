@@ -10,7 +10,7 @@ on a pty.
 ## Install
 
 ```sh
-pip install git+https://github.com/anarkiwi/kimtape
+pip install kimtape
 ```
 
 ## Use
@@ -22,6 +22,13 @@ kimtape run   --port /dev/ttyUSB0 --go 0200
 kimtape probe --port /dev/ttyUSB0     # what does this board answer, and how?
 kimtape term  --port /dev/ttyUSB0     # raw terminal, ^] to quit
 kimtape info  game.ptp                # parse a tape without a board
+```
+
+Tapes and images may be http(s) URLs, fetched on the fly:
+
+```sh
+kimtape load --port /dev/ttyUSB0 \
+  https://github.com/anarkiwi/kimformer/releases/latest/download/kimdos-0400.ptp --go 0400
 ```
 
 Programs distributed as raw binaries, Intel HEX or S-records — fig-FORTH,
