@@ -11,9 +11,12 @@ import urllib.parse
 import urllib.request
 
 from . import __version__
+from .bootstrap import Bootstrap
 from .monitor import SAL, Monitor
 from .port import Pacing, Port
+from .stub import STUBS
 from .tape import Tape, read_image
+from .xmodem import MONITOR
 
 PROBE_ADDR = 0x1780  # 6532 RAM, present on every KIM-1
 PROBE_BYTES = bytes([0x00, 0x00, 0x10, 0x00])
@@ -23,6 +26,7 @@ EPILOG = """\
 examples:
   kimtape load --port /dev/ttyUSB0 zp.ptp game.ptp --go 0200
   kimtape load --port /dev/ttyUSB0 https://example.com/game.ptp --go 0200
+  kimtape load --port /dev/ttyUSB0 --hex game.ptp     # no XMODEM stub
   kimtape dump --port /dev/ttyUSB0 --range 0200-0774 -o game.ptp
   kimtape probe --port /dev/ttyUSB0
   kimtape term --port /dev/ttyUSB0
@@ -102,8 +106,12 @@ def cmd_load(args):
     mon = Monitor(port)
     try:
         mon.sync(args.sync_tries)
-        for tape in tapes:
-            _load_one(mon, tape, args)
+        go = args.go if args.go is not None and not args.deposit else MONITOR
+        if args.hex or not _bootstrap(mon, tapes, go, args):
+            for tape in tapes:
+                _load_one(mon, tape, args)
+        elif go != MONITOR:
+            return 0
         for addr, data in args.deposit or []:
             mon.say("depositing %s at $%04X", data.hex(" ").upper(), addr)
             mon.deposit(addr, data)
@@ -112,6 +120,19 @@ def cmd_load(args):
     finally:
         port.close()
     return 0
+
+
+def _bootstrap(mon, tapes, go, args):
+    """Load every tape through the XMODEM stub; False to fall back to hex."""
+    mem = {}
+    for tape in tapes:
+        mon.say("xmodem: %s", tape)
+        mem.update(tape.mem)
+    rates = [args.baud_fast] + [r for r in (9600,) if r != args.baud_fast]
+    if Bootstrap(mon, rates, args.stub_at).load(mem, go):
+        return True
+    mon.say("falling back to hex records at %d baud", args.baud)
+    return False
 
 
 def _load_one(mon, tape, args):
@@ -386,7 +407,27 @@ def build_parser():
     p.add_argument("tapes", nargs="*", help="tape files or http(s) URLs")
     p.add_argument("--go", type=hexaddr, metavar="ADDR", help="run from this address")
     p.add_argument("--retries", type=int, default=2)
-    p.add_argument("--no-verify", action="store_true")
+    p.add_argument("--no-verify", action="store_true", help="hex: skip the read back")
+    p.add_argument(
+        "--hex",
+        action="store_true",
+        help="send hex records through the monitor, as every KIM-1 accepts, "
+        "rather than bootstrapping the faster XMODEM loader",
+    )
+    p.add_argument(
+        "--baud-fast",
+        type=int,
+        default=19200,
+        choices=sorted(STUBS),
+        metavar="RATE",
+        help="XMODEM bit rate, one of %(choices)s; 9600 is tried next, then hex",
+    )
+    p.add_argument(
+        "--stub-at",
+        type=hexaddr,
+        metavar="ADDR",
+        help="put the XMODEM stub here rather than in free RAM it finds",
+    )
     p.add_argument(
         "--deposit",
         type=deposit_spec,

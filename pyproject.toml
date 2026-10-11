@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kimtape"
-version = "0.1.2"
+version = "0.2.0"
 description = "Paper tape loader for the MOS Technology KIM-1 and its replicas"
 readme = "README.md"
 license = "Apache-2.0"
@@ -29,7 +29,7 @@ Issues = "https://github.com/anarkiwi/kimtape/issues"
 kimtape = "kimtape.cli:main"
 
 [project.optional-dependencies]
-dev = ["black", "pylint", "pytest", "pytest-cov", "pytest-xdist"]
+dev = ["black", "py65", "pylint", "pytest", "pytest-cov", "pytest-xdist", "tqdm"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

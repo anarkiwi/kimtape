@@ -17,11 +17,14 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cc65
       - run: pip install -e ".[dev]"
       - name: black
-        run: black --check --diff src tests examples
+        run: black --check --diff src tests examples stub
       - name: pylint
-        run: pylint src/kimtape tests examples
+        run: pylint src/kimtape tests examples stub
+      - name: stub bytes match stub/xmodem.s
+        run: python stub/build.py --check
 
   test:
     runs-on: ubuntu-latest
@@ -34,6 +37,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cc65
       - run: pip install -e ".[dev]"
       - name: pytest
         run: pytest -q
@@ -45,7 +49,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
-      - run: pip install -e .
+      - run: pip install -e . py65  # the fake board runs the stub on py65
       - name: shellcheck
         run: shellcheck examples/kimventure.sh tests/run_example.sh
       - name: kimventure against a fake board

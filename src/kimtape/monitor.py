@@ -39,15 +39,30 @@ class Monitor:
         self.log.write((fmt % args if args else fmt) + "\n")
         self.log.flush()
 
+    def ping(self):
+        """Send CR; True if the monitor answers it."""
+        self.p.take()
+        self.p.write(b"\r")
+        self.p.drain()
+        reply = self.p.take()
+        if b"KIM" in reply or PROMPT.search(reply):
+            self.say("monitor: %s", reply.strip().decode("ascii", "replace"))
+            return True
+        return False
+
+    def await_monitor(self, seconds):
+        """Ping until the monitor answers or seconds pass; True if it did."""
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if self.ping():
+                return True
+            time.sleep(0.2)
+        return False
+
     def sync(self, tries=3):
         """Wake the monitor.  The first CR after RS is what sets its bit rate."""
         for attempt in range(1, tries + 1):
-            self.p.take()
-            self.p.write(b"\r")
-            self.p.drain()
-            reply = self.p.take()
-            if b"KIM" in reply or PROMPT.search(reply):
-                self.say("monitor: %s", reply.strip().decode("ascii", "replace"))
+            if self.ping():
                 return
             self.say("no response (%d/%d) - press RS on the board", attempt, tries)
         raise SystemExit(

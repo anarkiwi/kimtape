@@ -2,7 +2,9 @@
 
 Paper tape loader for the MOS Technology KIM-1 and its replicas. Loads, dumps and
 verifies programs over a serial line using the stock ROM monitor — no extra
-hardware, no pyserial, standard library only.
+hardware, no pyserial, standard library only. `load` bootstraps a small XMODEM
+receiver through the monitor and sends the program at 19200 baud, about 30
+times faster than paper tape records at 1200.
 
 Works with the KIM-1, PAL-1, PAL-II, Micro-KIM, KIM Clone and simulators exposed
 on a pty.
@@ -17,6 +19,7 @@ pip install kimtape
 
 ```sh
 kimtape load  --port /dev/ttyUSB0 zp.ptp game.ptp --go 0200
+kimtape load  --port /dev/ttyUSB0 --hex game.ptp   # records only, no loader
 kimtape dump  --port /dev/ttyUSB0 --range 0200-0774 -o game.ptp
 kimtape run   --port /dev/ttyUSB0 --go 0200
 kimtape probe --port /dev/ttyUSB0     # what does this board answer, and how?
@@ -42,20 +45,25 @@ kimtape convert xKIM.hex -o xkim.ptp          # format read from the content
 Press RS before running: the monitor sets its bit rate from the first carriage
 return it receives. Defaults are 1200 baud, 8N1, no flow control.
 
-`load` verifies every byte by reading the range back, and retries a tape that
-does not match. `probe` reports which pacing a board needs when something is
-wrong; start there.
+`load` falls back to 9600 baud and then to hex records by itself if 19200 does
+not work; `--baud-fast` and `--hex` choose up front. Every byte is checked: the
+XMODEM loader reads each back as it stores it, and `--hex` reads the range back
+and retries a tape that does not match. `probe` reports which pacing a board
+needs when something is wrong; start there.
 
 As a library:
 
 ```python
 from kimtape import Monitor, Port, Tape
+from kimtape.bootstrap import Bootstrap
 
 port = Port("/dev/ttyUSB0", 1200)
 mon = Monitor(port)
 mon.sync()
-mon.load(Tape("game.ptp", open("game.ptp", "rb").read()))
-mon.go(0x0200)
+tape = Tape("game.ptp", open("game.ptp", "rb").read())
+if not Bootstrap(mon, [19200, 9600]).load(tape.mem, go=0x0200):
+    mon.load(tape)   # hex records
+    mon.go(0x0200)
 ```
 
 ## Examples
@@ -79,7 +87,7 @@ text editor and a disassembler. See
 
 ## Documentation
 
-- [docs/protocol.md](docs/protocol.md) — tape format, monitor commands, why writes are paced
+- [docs/protocol.md](docs/protocol.md) — tape format, monitor commands, the XMODEM loader and its timing
 - [docs/hardware.md](docs/hardware.md) — serial wiring, TTY jumper, PAL-II switch settings
 - [docs/kimventure.md](docs/kimventure.md) — the worked example, start to finish
 - [docs/kim-software.md](docs/kim-software.md) — other programs worth loading

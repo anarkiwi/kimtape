@@ -2,8 +2,9 @@
 """A KIM-1 ROM monitor stand-in on a pty, for exercising kimtape.py without hardware.
 
 Implements the TTY command set the loader uses: character echo, AAAA<space> to
-open, DD. to deposit, L to load paper tape, Q to punch, G to execute.  Prints the
-slave device path on stdout, then serves until stdin closes.
+open, DD. to deposit, L to load paper tape, Q to punch, G to execute.  G at a
+kimtape XMODEM stub runs it on a simulated 6502, bit by bit in real time.
+Prints the slave device path on stdout, then serves until stdin closes.
 """
 
 import os
@@ -15,10 +16,27 @@ import termios
 import threading
 import time
 
+from kimsim import START, Board
+
+from kimtape import bootstrap
+from kimtape.stub import DATA_ORG, STUBS
+
 RECORD = re.compile(rb";([0-9A-F]{2})([0-9A-F]{4})((?:[0-9A-F]{2})*)([0-9A-F]{4})")
 EAL, EAH = 0x17F7, 0x17F8
 CHUNK = 24
 CHAR_TIME = 0.001  # the monitor's output takes line time
+RAM = ((0x0000, 0x13FF), (0x17E7, 0x17FF))
+NOSTUB_LIFE = 1.0  # how long a stub that is never understood takes to give up
+
+
+class Outside:  # pylint: disable=too-few-public-methods
+    """Every address but those in a range."""
+
+    def __init__(self, inside):
+        self.inside = inside
+
+    def __contains__(self, addr):
+        return addr not in self.inside
 
 
 def cks(count, addr, data):
@@ -29,10 +47,11 @@ def cks(count, addr, data):
 class FakeKIM:  # pylint: disable=too-many-instance-attributes
     """A KIM-1 ROM monitor stand-in: echo, open, deposit, load, punch, execute."""
 
-    def __init__(self, master, drop=0, mute=False):
+    def __init__(self, master, drop=0, mode=""):
         self.fd, self.mem, self.addr, self.digits = master, {}, 0, b""
         self.drop, self.seen, self.gone, self.woke = drop, 0, None, False
-        self.mute, self.deaf = mute, False
+        self.mute, self.deaf = mode == "mute", False
+        self.stubs = mode != "nostub"
 
     def out(self, data):
         """Write to the line unless this board has gone deaf."""
@@ -72,7 +91,7 @@ class FakeKIM:  # pylint: disable=too-many-instance-attributes
             self.out(ch)  # the monitor echoes everything
         return ch
 
-    def serve(self):
+    def serve(self):  # pylint: disable=too-many-branches
         """The monitor command loop."""
         while True:
             ch = self.getc()
@@ -103,14 +122,66 @@ class FakeKIM:  # pylint: disable=too-many-instance-attributes
             elif ch == b"Q":
                 self.punch()
             elif ch == b"G":
-                self.gone = self.addr
-                self.say(b"\r\n")
-                return
+                stub = self.stub_at(self.addr)
+                if stub is None:
+                    self.gone = self.addr
+                    self.say(b"\r\n")
+                    return
+                if not self.stubs:
+                    self.ignore(NOSTUB_LIFE)
+                elif not self.run_stub(*stub):
+                    return
+                self.say(b"\r\n" + self.PAD + b"KIM")
+                self.prompt()
 
     def store(self, addr, value):
         """Honour the KIM memory map: only RAM sticks."""
         if addr < 0x1400 or 0x17E7 <= addr <= 0x17FF:
             self.mem[addr] = value
+
+    def ignore(self, seconds):
+        """Hear nothing for a while, as a stub that cannot be understood."""
+        time.sleep(seconds)
+        while select.select([self.fd], [], [], 0)[0]:
+            os.read(self.fd, 4096)
+
+    def stub_at(self, addr):
+        """(rate, stub, data address) if a kimtape stub starts at addr."""
+        for rate, stub in STUBS.items():
+            code, size = addr - stub["entry"], len(stub["code"])
+            at = stub["data_relocs"][0] - 1
+            word = self.mem.get(code + at, 0) | self.mem.get(code + at + 1, 0) << 8
+            data = word - (stub["code"][at] | stub["code"][at + 1] << 8) + DATA_ORG
+            image = bootstrap.relocate(stub, code, data & 0xFFFF)
+            if all(self.mem.get(code + i) == image[i] for i in range(size)):
+                return rate, stub
+        return None
+
+    def run_stub(self, rate, stub):
+        """Run the stub against the pty in real time; False if it ran a program."""
+        board = Board(1e6 / rate, bootstrap.stop_bits(stub), True, RAM)
+        for addr, value in self.mem.items():
+            board.mem.data[addr] = value
+        board.mpu.pc, began = self.addr, time.monotonic()
+        code = self.addr - stub["entry"]
+        outside = Outside(range(code, code + len(stub["code"])))
+        while board.mpu.pc not in outside:
+            ahead = board.mpu.processorCycles / 1e6 - (time.monotonic() - began)
+            if select.select([self.fd], [], [], max(ahead, 0))[0]:
+                try:
+                    board.uart.send(os.read(self.fd, 4096), board.mpu.processorCycles)
+                except OSError:
+                    return False
+            board.run(2000, outside)
+            out = bytes(byte for byte, _ in board.received())
+            if out:
+                os.write(self.fd, out)
+        for addr in board.mem.written:
+            self.mem[addr] = board.mem.data[addr]
+        if board.mpu.pc == START:
+            return True
+        self.gone = board.mpu.pc
+        return False
 
     def load(self):
         """LOADT: gather ';' records until the count is zero."""
@@ -168,14 +239,14 @@ class FakeKIM:  # pylint: disable=too-many-instance-attributes
 def main():
     """Announce the pty, serve until stdin closes, then report."""
     drop = int(sys.argv[1]) if len(sys.argv) > 1 else 0
-    mute = len(sys.argv) > 2 and sys.argv[2] == "mute"
+    mode = sys.argv[2] if len(sys.argv) > 2 else ""
     master, slave = pty.openpty()
     for fd in (master, slave):
         attrs = termios.tcgetattr(fd)
         attrs[0] = attrs[1] = attrs[3] = 0
         termios.tcsetattr(fd, termios.TCSANOW, attrs)
     print(os.ttyname(slave), flush=True)
-    kim = FakeKIM(master, drop, mute)
+    kim = FakeKIM(master, drop, mode)
     thread = threading.Thread(target=kim.serve, daemon=True)
     thread.start()
     sys.stdin.read()  # parent closes stdin to stop us

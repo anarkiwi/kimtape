@@ -18,9 +18,9 @@ BAUD = "115200"  # a pty ignores the rate; this only keeps the pacing delays sma
 class Board:
     """A fake KIM-1 monitor on a pty, and the memory it ends up holding."""
 
-    def __init__(self, drop=0, mute=False):
+    def __init__(self, drop=0, mode=""):
         self.proc = subprocess.Popen(  # pylint: disable=consider-using-with
-            [sys.executable, FAKE, str(drop)] + (["mute"] if mute else []),
+            [sys.executable, FAKE, str(drop)] + ([mode] if mode else []),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             universal_newlines=True,
