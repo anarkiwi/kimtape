@@ -8,7 +8,7 @@ describes.
 
 ## Paper tape records
 
-Each record is ASCII, uppercase, CRLF terminated:
+Each record is ASCII, uppercase:
 
 ```
 ;CCAAAADD...DDXXXX
@@ -17,13 +17,16 @@ Each record is ASCII, uppercase, CRLF terminated:
 | Field | Meaning |
 | --- | --- |
 | `;` | record mark |
-| `CC` | data byte count, 2 hex digits, up to `$18` (24) per record |
+| `CC` | data byte count, 2 hex digits; the ROM punches `$18` (24), `L` takes up to `$FF` |
 | `AAAA` | load address |
 | `DD` | data bytes, `CC` of them |
 | `XXXX` | checksum: `CC` plus both address bytes plus every data byte, 16 bit |
 
-A record with a zero count ends the tape. Its address field carries the number of
-data records that preceded it, and its checksum equals that number.
+Tape files separate records with CRLF; `L` ignores anything between records,
+so kimtape sends them back to back. A record with a zero count ends the tape.
+Its address field carries the number of data records that preceded it, and its
+checksum is the sum of that field's two bytes, as `L` checks it and `Q` punches
+it; kimtape also reads tapes that repeat the count there.
 
 `kimtape` validates every checksum on read and refuses a malformed tape rather
 than sending it to a board.
@@ -43,43 +46,173 @@ The ROM monitor accepts uppercase only:
 
 `$17F7`/`$17F8` is the end address in 6532 RAM, low byte first. `Q` starts
 from whichever address is open, not from `$17F5`/`$17F6`, so `kimtape` deposits
-the end address and then opens the start before every `Q`.
+the end address and then opens the start before every `Q`. `Q` (DUMP, `$1D42`)
+checks the end only between records, so it punches whole 24 byte records, up to
+23 bytes past the end.
 
-## Why writes are paced
+## The monitor's serial line
 
-The monitor has no receive buffer. It samples the line in software and can hold
-exactly one character, so anything sent faster than it can consume is lost.
+The monitor has no UART. Everything below is cycle counted from the published
+listing of the 6530-002 ROM (KIM-1 User Manual, appendix; MOS rev E, 1975) at
+1 MHz, with CNTH30 zero, as it is from 300 baud up. `src/kimtape/timing.py`
+holds the numbers; `tests/kimsim.py` models the routines at the bit level, and
+`tests/measure.py rom` checks that model against a ROM image, cycle for cycle.
 
-Writes are therefore clocked by the monitor's own echo, in lock-step: each
-character waits for the previous one's echo before going out (`--echo-lead 1`).
-Raising the lead lets characters run ahead and the monitor drops them — with a
-high lead, single-character commands like `L` and `CR` still work while
-multi-character ones like `AAAA<space>` arrive as garbage and draw no reply.
+### Bit timing and the auto-baud
 
-Links that do not echo fall back to a fixed `--char-delay` per character and
-`--line-delay` per record.
+RST (`$1C22`) waits for a start bit (DET1, `$1C31`), then counts it in DET3/DET2
+(`$1C3A`/`$1C42`) passes of 14 cycles, 5 more for the pass that carries into
+CNTH30, starting from `$FFFC`; it stores the count less 4 in CNTL30/CNTH30
+(`$17F2`/`$17F3`). A carriage return's start bit is followed by a one, so the
+count measures one bit. DELAY (`$1ED4`) then waits 14 × CNTL30 + 42 cycles
+including its JSR, DEHALF (`$1EEB`) about half that, and both GETCH and OUTCH
+spend 22 cycles a bit around DELAY, so the monitor's bit time is
+14 × CNTL30 + 64 cycles.
+
+That leaves 14 cycle steps, and the first poll of the start bit is 0–8 cycles
+late, so at some rates RST lands on either of two counts:
+
+| rate | host bit | CNTL30 RST measures | monitor bit | error |
+| --- | --- | --- | --- | --- |
+| 1200 | 833.3 | 55 | 834 | +0.08% |
+| 2400 | 416.7 | 25 or 26 | 414 or 428 | −0.64% or +2.72% |
+| 4800 | 208.3 | 10 or 11 | 204 or 218 | −2.08% or +4.64% |
+| 9600 | 104.2 | 3 | 106 | +1.76% |
+| 19200 | 52.1 | 0 | 64 | +22.9%, unusable |
+
+The host must decode the monitor's output too: a 16× oversampling receiver
+takes a mismatch of up to (½ − 1/16) / 9.5 = 4.6%. So the monitor's line tops
+out at 9600 baud at 1 MHz. kimtape reads CNTL30 after the first CR and, if
+another count is closer to the host's rate, deposits it; RAM is all that
+changes. The same deposit moves the monitor to another rate without a reset:
+`--monitor-baud 4800` syncs at `--baud`, writes CNTL30 for 4800, switches the
+port as the `.` goes out, and writes the original rate back before anything
+runs or kimtape exits. Should kimtape stop half way, press RS and the monitor
+measures `--baud` again.
+
+### Receiving a character
+
+GETCH (`$1E5A`) polls the line every 9 cycles (GET1: `BIT SAD`, `BNE`, `BMI`).
+On a low it calls DELAY then DEHALF, so its first sample (GET2, `LDA SAD`)
+falls DELAY + DEHALF + 8 cycles after the poll that saw the start bit, about
+1.5 bits; the others follow a monitor bit apart. After bit 7 it calls DELAY
+and DEHALF again, strips bit 7 (ROL, LSR) and returns 9 × DELAY + 2 × DEHALF
++ 196 cycles after that poll: within a few cycles of the end of an 8N1 stop
+bit (33 after it at 1200, 3 before it at 4800). It hears nothing until it is
+called again.
+
+What the monitor does with each character before polling again, from GETCH's
+return to the next poll's read, at the slower of a hex digit or letter:
+
+| after | path | cycles |
+| --- | --- | --- |
+| a hex digit at the prompt | READ, PACK, SCAN, READ | 165 |
+| anything but `;` in `L` | LOAD | 21 |
+| `;` | LOAD, GETBYT | 34 |
+| the first digit of any byte | PACK, GETBYT | 123 |
+| the count | PACK, TAX, CHK | 168 |
+| the address high byte | PACK, `STA POINTH`, CHK | 169 |
+| the address low byte | PACK, `STA POINTL`, CHK, TXA, BEQ | 174 |
+| a data byte | PACK, `STA (POINTL),Y`, CHK, INCPT carrying, DEX, BNE/INX | 202 |
+| the checksum high byte | PACK, CMP, then LOADE1 on a mismatch | 144 |
+| the checksum low byte | PACK, CMP, TXA, BNE LOAD across a page | 143 |
+
+`L` (LOAD, `$1CE7`) stores each byte as it arrives and checks the checksum at
+the end of the record. It counts data bytes down in X, so a record holds up to
+255; INCPT carries into POINTH, so a record may cross pages. It transmits
+nothing while it loads: the echo is the hardware's. At a zero count with a good
+checksum it prints `<DC3> KIM` and goes to START; on a bad checksum it prints
+`<DC3> ERR<DC3> KIM` and goes to START just the same, leaving `L` with the rest
+of the tape unread. A record whose `;` is lost to noise is skipped without a
+word: LOAD waits for the next `;`.
+
+### Pacing
+
+A character's start bit is seen some cycles after it falls; call that its
+lateness. All eight samples land in their bits while the lateness stays below
+a limit set by the bit times (`timing.window`, 411 cycles at 1200, 104 at 4800
+with CNTL30 10). Each character keeps the monitor from the line for
+9 × DELAY + 2 × DEHALF + 196 cycles plus the table above after it is seen; the
+part of that a frame of F bits does not cover carries over:
+
+    lateness' = max(9, lateness + busy − F × bit)
+
+kimtape takes the fewest frame bits for which this stays inside the limit over
+255 byte records, with the host's bit time 1% off either way:
+
+| rate | CNTL30 | 8N1 (10 bits) | 8N2 (11 bits) | 8 data, mark parity, 2 stop (12 bits) |
+| --- | --- | --- | --- | --- |
+| 1200 | 55 | drops | **streams** | streams |
+| 2400 | 25 | drops | **streams** | streams |
+| 4800 | 10 | drops | **streams** | streams |
+| 4800 | 11 | drops | drops | streams, output 4.6% slow |
+| 9600 | 3 | drops | drops | drops: lock-step |
+
+8N1 never works: GETCH alone takes the whole frame. 8N2 leaves
+a whole bit for the work, which at 4800 is 9 cycles more than the slowest
+character needs. No frame suffices at 9600, where kimtape waits for each echo
+instead (lock-step), and the gap the host's turnaround leaves covers the work.
+The rule passes exactly the frames that the bit level model loads, and one
+bit less than it picks drops characters (`tests/test_timing.py`). Nothing
+needs a pause of its own; the record length is bounded only by `L`'s 255.
+
+Streaming lets 16 characters run ahead of their echo. During `L` the echo must
+match what was sent exactly, since the monitor is silent; anything else is its
+`ERR`. kimtape then stops, brings the monitor back to its prompt (sending end
+records, lock-step, until a CR is answered, in case `L` lost its place), and
+resumes two records before the one where the echo went wrong, lock-step from
+then on. No `KIM` after the end record means the same, from the first record.
+`--lock-step` waits for every echo from the start; links that do not echo fall
+back to a fixed `--char-delay` per character.
 
 ## Fill characters
 
-The monitor pads every CR/LF with NUL bytes, sized for a real teletype's carriage
-to return. A prompt therefore looks like:
+The monitor pads every CR/LF it prints with NUL bytes, sized for a real
+teletype's carriage to return. A prompt therefore looks like:
 
 ```
 <CR><LF><00><00><00><00><00><00>1780 00
 ```
 
 Anything parsing monitor output must tolerate that padding; the address never
-follows the newline immediately.
+follows the newline immediately. `L` prints nothing until it ends.
 
 ## Verification
 
-`load` reads each range back and compares it byte for byte. It prefers `Q`, which
-punches the whole range in one pass. If `Q` returns no records it falls back to
-opening the address and stepping with `CR`, which is far slower but uses only the
-two commands every monitor answers.
+A hex load counts as done when the echo matched what was sent and the end
+record drew `KIM` without `ERR`: every record's checksum held. That leaves a
+record lost whole to a damaged `;`, which the monitor cannot see. The XMODEM
+stub is checked for that, one byte a record (the last, which a lost record
+leaves stale); `--verify` reads every hex load back.
+
+The read back prefers `Q`, which punches the whole range in one pass. If `Q`
+returns no records it falls back to opening the address and stepping with `CR`,
+which is far slower but uses only the two commands every monitor answers.
 
 If neither reads back, the load is reported unverifiable rather than retried:
 nothing about a failed readback implies the load itself failed.
+
+### Hex throughput
+
+`tests/measure.py throughput` on the bit level model, with a host that answers
+an echo 1 ms after its stop bit. The old way is kimtape 0.1: 24 byte records,
+lock-step, a quiet wait a record, and always a `Q` read back. The stub column
+is the bootstrap's hex stage, 416 bytes, with its check.
+
+| rate | method | 17K program | bytes/s | with `--verify` | stub |
+| --- | --- | --- | --- | --- | --- |
+| 1200 | lock-step, 24 byte records | 874 s | 20 | 874 s | 22.3 s |
+| 1200 | streamed, 255 byte records | 340 s | 51 | 775 s | 8.3 s |
+| 2400 | lock-step, 24 byte records | 458 s | 38 | 458 s | 11.7 s |
+| 2400 | streamed, 255 byte records | 170 s | 103 | 386 s | 4.2 s |
+| 4800 | lock-step, 24 byte records | 251 s | 69 | 251 s | 6.4 s |
+| 4800 | streamed, 255 byte records | 85 s | 205 | 192 s | 2.1 s |
+| 9600 | lock-step, 255 byte records | 73 s | 239 | 129 s | 1.8 s |
+
+`--monitor-baud 4800` makes the 1200 baud user's bootstrap stage four times
+faster. 9600 lock-step depends on the adapter's turnaround: at 1 ms it beats
+4800 streamed, at an FTDI's default 16 ms it is far slower. `kimtape tune`
+measures it on the board.
 
 ## The XMODEM loader
 
@@ -207,9 +340,7 @@ timer:
 | XMODEM 19200 | 16 ms | 14.5 | 1198 |
 | XMODEM 38400 | 1 ms | 8.2 | 2135 |
 | XMODEM 38400 | 16 ms | 10.2 | 1703 |
-| hex records 1200 | - | 369 | 47 |
 
-Hex records at 1200 baud are 2.5 characters per byte, about 47 bytes/s, and
-`load` then reads the range back with `Q` at about the same rate, so the same
-program takes over 12 minutes that way. Putting the stub in costs about 20 s
-(18 records and their read back at 1200 baud).
+Hex records stream at 2.05 characters a byte in 11 bit frames: 51 bytes/s at
+1200 baud, 205 at 4800 (see [hex throughput](#hex-throughput)). Putting the
+stub in costs about 8 s at 1200 baud, 2 s with `--monitor-baud 4800`.

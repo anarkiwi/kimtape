@@ -126,9 +126,18 @@ def test_truncated_end_record_is_accepted():
 
 
 def test_end_record_counts_past_255():
+    """The monitor's L sums the count's two bytes as the end record's checksum."""
     mem = {0x2000 + i: i & 0xFF for i in range(24 * 300)}
     text = Tape.from_memory("t.ptp", mem).text()
-    assert text.endswith(b";00012C012C\r\n")
+    assert text.endswith(b";00012C002D\r\n")
     assert Tape("t.ptp", text).mem == mem
+    assert Tape("t.ptp", text.replace(b";00012C002D", b";00012C012C")).mem == mem
     with pytest.raises(ValueError, match="bad checksum"):
-        Tape("t.ptp", text.replace(b";00012C012C", b";00012C012D"))
+        Tape("t.ptp", text.replace(b";00012C002D", b";00012C002E"))
+
+
+def test_records_of_any_length():
+    mem = {0x02F0 + i: i & 0xFF for i in range(600)}
+    tape = Tape.from_memory("t.ptp", mem, 255)
+    assert [int(r[1:3], 16) for r in tape.records] == [255, 255, 90]
+    assert Tape("t.ptp", tape.text()).mem == mem

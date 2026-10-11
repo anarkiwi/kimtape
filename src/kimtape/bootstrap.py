@@ -118,8 +118,9 @@ def transfer(port, sender, log, wait=1.0, start=None):
 class Bootstrap:  # pylint: disable=too-few-public-methods
     """Loads a memory image through the stub, trying each rate in turn."""
 
-    def __init__(self, mon, rates, code=None):
+    def __init__(self, mon, rates, code=None, baud=None, verify=False):
         self.mon, self.rates, self.code = mon, rates, code
+        self.baud, self.verify = baud, verify
 
     def load(self, mem, go=MONITOR):
         """True once mem is loaded; False if no rate worked and hex is left.
@@ -141,18 +142,20 @@ class Bootstrap:  # pylint: disable=too-few-public-methods
         code, data = where
         image = relocate(stub, code, data)
         tape = Tape.from_memory("xmodem stub", dict(zip(range(code, 0x10000), image)))
-        mon.load(tape)
-        if not mon.verify(tape):
+        mon.rate(self.baud)
+        loaded = mon.load(tape)
+        if not loaded or not (mon.verify if self.verify else mon.spot)(tape):
             mon.say("the stub did not load")
             return False
+        mon.rate()
         mon.go(code + stub["entry"])
-        monitor_rate = port.baud
-        port.set_rate(rate, stop_bits(stub))
+        home = port.baud, port.frame
+        port.set_rate(rate, 9 + stop_bits(stub))
         mon.say("xmodem at %d baud", rate)
         try:
             transfer(port, Sender(payload(stub, mem, data, go), port.echo), mon.log)
         except Rejected as err:
-            port.set_rate(monitor_rate)
+            port.set_rate(*home)
             mon.await_monitor(STUB_LIFE)
             raise SystemExit(
                 "kimtape: %s.  Is there RAM there?  On a PAL-II, SW4 (K1-K4) "
@@ -161,13 +164,13 @@ class Bootstrap:  # pylint: disable=too-few-public-methods
         except Failed as err:
             mon.say("\n  %s at %d baud", err, rate)
             port.send(bytes([CAN, CAN]))
-            port.set_rate(monitor_rate)
+            port.set_rate(*home)
             if not mon.await_monitor(STUB_LIFE):
                 raise SystemExit(
                     "kimtape: the monitor did not come back; press RS and retry"
                 ) from None
             return False
-        port.set_rate(monitor_rate)
+        port.set_rate(*home)
         if go == MONITOR:
             mon.await_monitor(STUB_LIFE)
         return True

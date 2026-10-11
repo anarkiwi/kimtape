@@ -22,7 +22,7 @@ CPU cycles: a host UART at any rate and error drives port A bit 7, and port B
 bit 0, ANDed with the input as the KIM-1 echo does, is decoded back. The stub
 tests use it directly; `tests/measure.py tolerance` and
 `tests/measure.py throughput` produce the tables in
-[protocol.md](protocol.md#the-xmodem-loader).
+[protocol.md](protocol.md).
 
 ## The fake board
 
@@ -36,14 +36,40 @@ tests passed against it while real hardware failed. Anything the fake models
 loosely is a place where the tests will agree with each other and disagree with a
 board.
 
-It takes one argument, a record number to drop, which drives the retry tests;
-`-1` drops every record. A second, `mute`, makes it stop answering after the
-reset; `nostub`, makes a started XMODEM stub never answer.
+Its `L` is the monitor model's LOAD (below), fed character by character, with
+the ROM's `KIM` and `ERR` replies. It takes one argument, a record number to
+lose whole, as a damaged `;` would, which drives the retry tests; `-1` loses
+every record. A second changes the fault or the board: `err` spoils a digit of
+that record so the monitor reports `ERR`; `nostream` garbles characters that
+arrive while another is waiting, as a monitor slower than its listing would;
+`mute` stops answering after the reset; `nostub` makes a started XMODEM stub
+never answer. Its CNTL30 is what RST would measure at the pty's rate.
 
 `G` at an address holding a kimtape stub runs the stub on `tests/kimsim.py`,
 bridged to the pty in real time, so `load` is tested end to end through the
 real 6502 code; when the stub returns to `$1C4F` the fake carries on as the
 monitor.
+
+## The monitor model
+
+`kimsim.Listing` is the ROM monitor's `L` at the bit level: GETCH's polls and
+samples at the cycles DELAY and DEHALF give for a CNTL30, and LOAD's work on
+each character summed from the routines it runs, deaf meanwhile. `kimsim`
+also times `Q`. `tests/test_timing.py` drives it with host lines to check the
+pacing rule in `src/kimtape/timing.py`.
+
+`tests/measure.py rom --image kim.bin` runs the same lines through a monitor
+ROM image ($1800–$1FFF) on py65 and checks the model agrees character by
+character, cycle for cycle, including on lines it garbles, and that `Q` takes
+the cycles the model says. No ROM is in this repository; assemble one from the
+published listing (e.g. github.com/jefftranter/6502, `asm/KIM-1/ROMs/kim.s`):
+
+```sh
+ca65 --feature labels_without_colons kim.s && ld65 -t none -o kim.bin kim.o
+```
+
+py65 1.2 counts `DEC` absolute as 3 cycles rather than 6; `kimsim.Board`
+corrects it, which DELAY's loop depends on.
 
 ## The catalogue
 

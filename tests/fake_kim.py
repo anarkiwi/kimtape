@@ -7,18 +7,20 @@ kimtape XMODEM stub runs it on a simulated 6502, bit by bit in real time.
 Prints the slave device path on stdout, then serves until stdin closes.
 """
 
+import fcntl
 import os
 import pty
 import re
 import select
+import struct
 import sys
 import termios
 import threading
 import time
 
-from kimsim import START, Board
+from kimsim import START, Board, Line, Listing
 
-from kimtape import bootstrap
+from kimtape import bootstrap, timing
 from kimtape.stub import DATA_ORG, STUBS
 
 RECORD = re.compile(rb";([0-9A-F]{2})([0-9A-F]{4})((?:[0-9A-F]{2})*)([0-9A-F]{4})")
@@ -26,6 +28,12 @@ EAL, EAH = 0x17F7, 0x17F8
 CHUNK = 24
 CHAR_TIME = 0.001  # the monitor's output takes line time
 RAM = ((0x0000, 0x13FF), (0x17E7, 0x17FF))
+CNTL30 = 0x17F2
+RATES = {
+    getattr(termios, name): int(name[1:])
+    for name in dir(termios)
+    if name[1:].isdigit() and name[0] == "B"
+}
 NOSTUB_LIFE = 1.0  # how long a stub that is never understood takes to give up
 
 
@@ -51,7 +59,7 @@ class FakeKIM:  # pylint: disable=too-many-instance-attributes
         self.fd, self.mem, self.addr, self.digits = master, {}, 0, b""
         self.drop, self.seen, self.gone, self.woke = drop, 0, None, False
         self.mute, self.deaf = mode == "mute", False
-        self.stubs = mode != "nostub"
+        self.stubs, self.mode = mode != "nostub", mode
 
     def out(self, data):
         """Write to the line unless this board has gone deaf."""
@@ -112,6 +120,7 @@ class FakeKIM:  # pylint: disable=too-many-instance-attributes
                 self.digits = b""
                 if not self.woke:
                     self.woke = True  # first CR sets the bit rate
+                    self.autobaud()
                     self.say(b"\r\n" + self.PAD + b"KIM")
                 else:
                     self.addr = (self.addr + 1) & 0xFFFF
@@ -183,33 +192,50 @@ class FakeKIM:  # pylint: disable=too-many-instance-attributes
         self.gone = board.mpu.pc
         return False
 
+    def autobaud(self):
+        """RST measures the CR's start bit into CNTL30 at the line's rate."""
+        baud = RATES.get(termios.tcgetattr(self.fd)[5], 1200)
+        self.mem[CNTL30] = max(0, timing.autobaud(timing.bit_time(baud))[-1])
+        self.mem[CNTL30 + 1] = 0
+
+    def pending(self):
+        """Characters waiting on the line."""
+        return struct.unpack("i", fcntl.ioctl(self.fd, termios.FIONREAD, b"\0" * 4))[0]
+
     def load(self):
-        """LOADT: gather ';' records until the count is zero."""
-        line = b""
+        """LOAD, character by character, as the monitor's listing has it.
+
+        Faults: drop N skips record N whole, as a lost ';' does; mode err spoils
+        a data digit so its checksum fails; nostream garbles what comes in a rush.
+        """
+        model = Listing(0, Line())
+        model.mem = Stores(self)
+        loader = model.loader()
+        next(loader)
+        loader.send(ord("L"))
+        offset, queue = 0, b""
         while True:
-            ch = self.getc()
+            ch = queue[:1] or self.getc()
+            queue = queue[1:]
             if not ch:
                 return
-            if ch in b"\r\n":
-                m = RECORD.fullmatch(line.strip())
-                line = b""
-                if not m:
-                    continue
-                count, addr = int(m.group(1), 16), int(m.group(2), 16)
-                data = bytes.fromhex(m.group(3).decode())
-                if count == 0:
-                    self.say(b"\r\n" + self.PAD + b"KIM")
-                    self.prompt()
-                    return
-                if cks(count, addr, data) != int(m.group(4), 16):
-                    continue  # a real KIM counts the error and skips
-                self.seen += 1
-                if self.drop in (-1, self.seen):  # injected fault
-                    continue
-                for i, b in enumerate(data):
-                    self.store(addr + i, b)
-            else:
-                line += ch
+            offset += 1
+            if self.mode == "nostream" and self.pending() > 1:
+                ch = bytes([ch[0] ^ 1])
+            if ch == b";" and not queue:
+                queue = self.getc() + self.getc()
+                self.seen, offset = self.seen + (queue != b"00"), 0
+                spoil = queue != b"00" and self.drop in (-1, self.seen)
+                ch = b"?" if spoil and self.mode != "err" else ch
+            if offset == 8 and self.mode == "err" and self.drop in (-1, self.seen):
+                ch = bytes([ch[0] ^ 1])
+            try:
+                loader.send(ch[0])
+            except StopIteration as stop:
+                self.say(b"\x13 ERR" if stop.value == "ERR" else b"")
+                self.say(b"\x13 KIM\r\n" + self.PAD + b"\r\n" + self.PAD + b"KIM")
+                self.prompt()
+                return
 
     def punch(self):
         """DUMPT: write the open address through EAL/EAH as tape records."""
@@ -234,6 +260,16 @@ class FakeKIM:  # pylint: disable=too-many-instance-attributes
             n += 1
         self.say(b";00%04X%04X\r\n%s" % (n, n, self.PAD))
         self.prompt()
+
+
+class Stores:  # pylint: disable=too-few-public-methods
+    """Memory as the model writes it, through the board's map."""
+
+    def __init__(self, kim):
+        self.kim = kim
+
+    def __setitem__(self, addr, value):
+        self.kim.store(addr, value)
 
 
 def main():

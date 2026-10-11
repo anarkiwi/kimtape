@@ -22,6 +22,7 @@ kimtape load  --port /dev/ttyUSB0 zp.ptp game.ptp --go 0200
 kimtape load  --port /dev/ttyUSB0 --hex game.ptp   # records only, no loader
 kimtape dump  --port /dev/ttyUSB0 --range 0200-0774 -o game.ptp
 kimtape run   --port /dev/ttyUSB0 --go 0200
+kimtape tune  --port /dev/ttyUSB0     # fastest hex record settings for this board
 kimtape probe --port /dev/ttyUSB0     # what does this board answer, and how?
 kimtape term  --port /dev/ttyUSB0     # raw terminal, ^] to quit
 kimtape info  game.ptp                # parse a tape without a board
@@ -46,10 +47,13 @@ Press RS before running: the monitor sets its bit rate from the first carriage
 return it receives. Defaults are 1200 baud, 8N1, no flow control.
 
 `load` falls back to 9600 baud and then to hex records by itself if 19200 does
-not work; `--baud-fast` and `--hex` choose up front. Every byte is checked: the
-XMODEM loader reads each back as it stores it, and `--hex` reads the range back
-and retries a tape that does not match. `probe` reports which pacing a board
-needs when something is wrong; start there.
+not work; `--baud-fast` and `--hex` choose up front. Hex records stream in
+frames sized from the monitor's own timing, 255 bytes a record, and the
+monitor's checksums are trusted; `--verify` reads them back. `--monitor-baud
+4800` moves the monitor to 4800 baud for the hex stage without a reset and back
+afterwards, four times faster; `tune` finds the fastest setting a board takes.
+The XMODEM loader reads each byte back as it stores it. `probe` reports what a
+board answers when something is wrong; start there.
 
 As a library:
 
@@ -87,7 +91,7 @@ text editor and a disassembler. See
 
 ## Documentation
 
-- [docs/protocol.md](docs/protocol.md) — tape format, monitor commands, the XMODEM loader and its timing
+- [docs/protocol.md](docs/protocol.md) — tape format, the monitor's serial timing and pacing, the XMODEM loader
 - [docs/hardware.md](docs/hardware.md) — serial wiring, TTY jumper, PAL-II switch settings
 - [docs/kimventure.md](docs/kimventure.md) — the worked example, start to finish
 - [docs/kim-software.md](docs/kim-software.md) — other programs worth loading
