@@ -1,9 +1,8 @@
 """Serial port with pacing suited to a monitor that bit-bangs its UART.
 
-The KIM-1 monitor has no receive buffer: it samples the line in software and can
-hold exactly one character.  Writes are therefore clocked by the monitor's own
-echo, in lock-step by default.  Where the link does not echo, a fixed delay per
-character stands in.
+The KIM-1 monitor has no receive buffer: it samples the line in software and
+works on each character before it listens again.  Writes are either streamed
+in frames long enough to cover that work, or clocked by the monitor's echo.
 """
 
 import os
@@ -13,7 +12,12 @@ import termios
 import time
 from dataclasses import dataclass
 
-BITS = 10  # 8N1: start + 8 data + stop
+CMSPAR = getattr(termios, "CMSPAR", 0o10000000000)  # Linux: mark/space parity
+FRAME_FLAGS = {
+    10: 0,
+    11: termios.CSTOPB,
+    12: termios.CSTOPB | termios.PARENB | termios.PARODD | CMSPAR,
+}
 
 
 def _speed(baud):
@@ -27,16 +31,16 @@ def _speed(baud):
 class Pacing:
     """How fast characters may be pushed at the monitor.
 
-    ``echo`` selects the regime: clock writes against the monitor's echo, or
-    fall back to a fixed delay.  ``echo_lead`` is how many characters the echo
-    may lag behind; 1 is lock-step, which is what the monitor's software UART
-    needs.  The delays apply only when there is no echo to clock against.
+    ``stream`` lets up to ``window`` characters run ahead of their echo, the
+    frame doing the pacing; otherwise ``echo_lead`` (1 is lock-step) applies.
+    ``char_delay`` paces a link that does not echo, when not streaming.
     """
 
     char_delay: float = None
-    line_delay: float = 0.25
     echo_lead: int = 1
     echo: bool = True
+    stream: bool = False
+    window: int = 16
 
 
 class Port:  # pylint: disable=too-many-instance-attributes
@@ -57,7 +61,7 @@ class Port:  # pylint: disable=too-many-instance-attributes
             raise SystemExit(
                 "kimtape: %s is not a serial port (%s)" % (dev, err.args[-1])
             ) from None
-        self.baud = baud
+        self.baud, self.frame = baud, 10
         self._timing(baud)
         self.pacing = pacing or Pacing()
         if self.pacing.char_delay is None:
@@ -70,33 +74,26 @@ class Port:  # pylint: disable=too-many-instance-attributes
         """Whether writes are currently clocked against the monitor's echo."""
         return self.pacing.echo
 
-    @property
-    def line_delay(self):
-        """Pause after each tape record when there is no echo to clock against."""
-        return self.pacing.line_delay
-
-    def _timing(self, baud, stop_bits=1):
-        self.char_time = (BITS + stop_bits - 1) / float(baud)
+    def _timing(self, baud, frame=10):
+        self.char_time = frame / float(baud)
         # quiet detection cannot be tighter than the scheduler can wake us: at
         # 1200 baud four character times dominate, but on a fast link it would
         # otherwise call the line idle before the far end had begun replying
         self.quiet_time = max(4 * self.char_time, 0.005)
         self.echo_timeout = max(0.5, 40 * self.char_time)
 
-    def _configure(self, speed, stop_bits=1, when=termios.TCSANOW, flush=None):
+    def _configure(self, speed, frame=10, when=termios.TCSANOW, flush=None):
         cc = list(termios.tcgetattr(self.fd)[6])
         cc[termios.VMIN], cc[termios.VTIME] = 0, 0
-        cflag = termios.CS8 | termios.CREAD | termios.CLOCAL
-        if stop_bits == 2:
-            cflag |= termios.CSTOPB
+        cflag = termios.CS8 | termios.CREAD | termios.CLOCAL | FRAME_FLAGS[frame]
         termios.tcsetattr(self.fd, when, [0, 0, cflag, 0, speed, speed, cc])
         termios.tcflush(self.fd, termios.TCIOFLUSH if flush is None else flush)
 
-    def set_rate(self, baud, stop_bits=1):
-        """Change the bit rate once what is queued has gone, dropping input."""
-        self._configure(_speed(baud), stop_bits, termios.TCSADRAIN, termios.TCIFLUSH)
-        self.baud = baud
-        self._timing(baud, stop_bits)
+    def set_rate(self, baud, frame=10):
+        """Change bit rate and frame once what is queued has gone, dropping input."""
+        self._configure(_speed(baud), frame, termios.TCSADRAIN, termios.TCIFLUSH)
+        self.baud, self.frame = baud, frame
+        self._timing(baud, frame)
         self.rx = bytearray()
 
     @staticmethod
@@ -122,6 +119,7 @@ class Port:  # pylint: disable=too-many-instance-attributes
     def pace(self, echo, char_delay=None, echo_lead=1):
         """Switch pacing regime; used by the probe to find what the board needs."""
         self.pacing.echo, self.pacing.echo_lead = echo, echo_lead
+        self.pacing.stream = False
         if char_delay is not None:
             self.pacing.char_delay = char_delay
 
@@ -143,34 +141,58 @@ class Port:  # pylint: disable=too-many-instance-attributes
         while time.time() < deadline and self.poll(self.quiet_time):
             pass
 
+    def _await(self, count):
+        """Read until count bytes are in; on silence, conclude the link has no echo."""
+        deadline = time.time() + self.echo_timeout
+        while len(self.rx) < count and time.time() < deadline:
+            self.poll(self.char_time)
+        if len(self.rx) < count:
+            self.pacing.echo = False
+
+    def _put(self, data):
+        """Write what the device will take now; return how much that was."""
+        try:
+            done = os.write(self.fd, data)
+        except BlockingIOError:
+            select.select([], [self.fd], [], 1.0)
+            return 0
+        self._trace("-->", data[:done])
+        return done
+
     def write(self, data):
-        """Send bytes, paced by the monitor's echo or else by the clock."""
-        base = len(self.rx)
-        for i in range(len(data)):
+        """Send bytes paced by the frame or the echo; the index of a bad echo, or None.
+
+        The KIM-1 echoes in hardware, so the echo is exactly what was sent unless
+        the monitor itself transmitted meanwhile.
+        """
+        base, sent, checked = len(self.rx), 0, 0
+        lead = self.pacing.window if self.pacing.stream else self.pacing.echo_lead
+        while sent < len(data):
             if self.pacing.echo:
-                target = base + i + 1 - self.pacing.echo_lead
-                deadline = time.time() + self.echo_timeout
-                while len(self.rx) < target and time.time() < deadline:
-                    self.poll(self.char_time)
-                if len(self.rx) < target:
-                    # no echo on this link: pace on the clock instead
-                    self.pacing.echo = False
-            if not self.pacing.echo:
+                self._await(base + sent + 1 - lead)
+                got = self.rx[base + checked : base + sent]
+                if got != data[checked : checked + len(got)]:
+                    break
+                checked += len(got)
+                room = len(self.rx) - base + lead - sent
+            elif self.pacing.stream:
+                room = len(data)
+            else:
                 time.sleep(self.pacing.char_delay)
-            os.write(self.fd, data[i : i + 1])
-            self._trace("-->", data[i : i + 1])
+                room = 1
+            sent += self._put(data[sent : sent + max(room, 0)])
             self.poll(0)
+        if not self.pacing.echo:
+            return None
+        self._await(base + sent)
+        got = bytes(self.rx[base : base + sent])
+        return next((i for i, (a, b) in enumerate(zip(got, data)) if a != b), None)
 
     def send(self, data):
         """Send bytes as fast as the line takes them, unpaced."""
         view = memoryview(data)
         while view:
-            select.select([], [self.fd], [], 1.0)
-            try:
-                view = view[os.write(self.fd, view) :]
-            except BlockingIOError:
-                continue
-        self._trace("-->", data)
+            view = view[self._put(view) :]
 
     def take(self):
         """Return everything received so far and clear the buffer."""

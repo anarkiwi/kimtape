@@ -2,10 +2,12 @@
 
 import argparse
 import os
+import random
 import re
 import select
 import sys
 import termios
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -16,10 +18,12 @@ from .monitor import SAL, Monitor
 from .port import Pacing, Port
 from .stub import STUBS
 from .tape import Tape, read_image
+from .timing import FRAMES, RECORD
 from .xmodem import MONITOR
 
 PROBE_ADDR = 0x1780  # 6532 RAM, present on every KIM-1
 PROBE_BYTES = bytes([0x00, 0x00, 0x10, 0x00])
+TUNE_RATES = (1200, 2400, 4800, 9600)
 
 DESCRIPTION = "Load, dump and run programs on a KIM-1 over a serial line."
 EPILOG = """\
@@ -28,7 +32,9 @@ examples:
   kimtape load --port /dev/ttyUSB0 https://example.com/game.ptp --go 0200
   kimtape load --port /dev/ttyUSB0 --hex game.ptp     # no XMODEM stub
   kimtape dump --port /dev/ttyUSB0 --range 0200-0774 -o game.ptp
+  kimtape load --port /dev/ttyUSB0 --hex --monitor-baud 4800 game.ptp
   kimtape probe --port /dev/ttyUSB0
+  kimtape tune --port /dev/ttyUSB0
   kimtape term --port /dev/ttyUSB0
   kimtape convert forth.bin --at 2000 -o forth.ptp
 
@@ -44,11 +50,17 @@ def open_port(args):
         args.baud,
         Pacing(
             char_delay=(None if args.char_delay is None else args.char_delay / 1000.0),
-            line_delay=args.line_delay / 1000.0,
             echo_lead=args.echo_lead,
         ),
         args.trace,
     )
+
+
+def open_monitor(args, port):
+    """A Monitor on port with the hex record options from parsed arguments."""
+    mon = Monitor(port, record=args.record, lock=args.lock_step)
+    mon.frame = args.frame
+    return mon
 
 
 def read_source(source):
@@ -103,13 +115,15 @@ def cmd_load(args):
     if not tapes:
         raise SystemExit("kimtape: no tapes given")
     port = open_port(args)
-    mon = Monitor(port)
+    mon = open_monitor(args, port)
     try:
         mon.sync(args.sync_tries)
         go = args.go if args.go is not None and not args.deposit else MONITOR
         if args.hex or not _bootstrap(mon, tapes, go, args):
+            mon.rate(args.monitor_baud)
             for tape in tapes:
                 _load_one(mon, tape, args)
+            mon.rate()
         elif go != MONITOR:
             return 0
         for addr, data in args.deposit or []:
@@ -129,7 +143,9 @@ def _bootstrap(mon, tapes, go, args):
         mon.say("xmodem: %s", tape)
         mem.update(tape.mem)
     rates = [args.baud_fast] + [r for r in (9600,) if r != args.baud_fast]
-    if Bootstrap(mon, rates, args.stub_at).load(mem, go):
+    if Bootstrap(mon, rates, args.stub_at, args.monitor_baud, args.verify).load(
+        mem, go
+    ):
         return True
     mon.say("falling back to hex records at %d baud", args.baud)
     return False
@@ -137,8 +153,9 @@ def _bootstrap(mon, tapes, go, args):
 
 def _load_one(mon, tape, args):
     for attempt in range(args.retries + 1):
-        mon.load(tape)
-        if args.no_verify:
+        if not mon.load(tape, args.retries + 1):
+            raise SystemExit("kimtape: the monitor did not take %s" % tape.name)
+        if not args.verify:
             return
         result = mon.verify(tape)
         if result:
@@ -147,7 +164,7 @@ def _load_one(mon, tape, args):
             raise SystemExit(
                 "kimtape: cannot read memory back, so the load is unverifiable."
                 "  Run 'kimtape probe --port %s' to find the pacing this board "
-                "needs, or pass --no-verify to load anyway." % args.port
+                "needs, or load without --verify." % args.port
             )
         if attempt == args.retries:
             raise SystemExit(
@@ -161,10 +178,12 @@ def cmd_dump(args):
     """Punch a memory range back out and write it as a tape."""
     lo, hi = args.range
     port = open_port(args)
-    mon = Monitor(port)
+    mon = open_monitor(args, port)
     try:
         mon.sync(args.sync_tries)
+        mon.rate(args.monitor_baud)
         mem = mon.punch(lo, hi)
+        mon.rate()
     finally:
         port.close()
     holes = (hi - lo + 1) - sum(1 for a in range(lo, hi + 1) if a in mem)
@@ -296,6 +315,81 @@ def _probe_report(winner, stepped, punched):
         say("  flags to use      : %s", " ".join(winner[2]))
 
 
+def _tune_rate(mon, tape, baud):
+    """Load and read back tape at baud in ever safer ways, up to the first that works.
+
+    Each try is (rate, frame, record, lock-step, extra frame bit, ok, bytes/s).
+    """
+    tried = []
+    for record, extra, lock in ((RECORD, 0, False), (24, 0, False), (RECORD, 1, False)):
+        mon.lock, mon.record, mon.frame = lock, record, None
+        mon.rate(baud)
+        if not mon.p.pacing.stream or mon.p.frame + extra > FRAMES[-1]:
+            break
+        if extra:
+            mon.frame = mon.p.frame + extra
+            mon.rate(baud)
+        tried.append(_tune_try(mon, tape, baud, extra))
+        if tried[-1][5]:
+            return tried
+    mon.lock, mon.record, mon.frame = True, RECORD, None
+    mon.rate(baud)
+    return tried + [_tune_try(mon, tape, baud, 0)]
+
+
+def _tune_try(mon, tape, baud, extra):
+    began = time.time()
+    loaded = mon.load(tape, 1)
+    speed = len(tape.mem) / (time.time() - began)
+    good = loaded and bool(mon.verify(tape))
+    return baud, mon.p.frame, mon.record, mon.lock, extra, good, speed
+
+
+def cmd_tune(args):
+    """Load a pattern at each rate and pacing, verify it, report the fastest."""
+    lo, hi = args.range
+    mem = {addr: random.randrange(256) for addr in range(lo, hi + 1)}
+    tape = Tape.from_memory("pattern $%04X-$%04X" % (lo, hi), mem)
+    port = open_port(args)
+    mon = open_monitor(args, port)
+    tried = []
+    try:
+        mon.sync(args.sync_tries)
+        for baud in args.rates:
+            tried += _tune_rate(mon, tape, baud)
+    finally:
+        mon.lock, mon.frame = False, None
+        try:
+            mon.rate()
+        finally:
+            port.close()
+    _tune_report(args, tried)
+    return 0
+
+
+def _tune_report(args, tried):
+    say("\n  rate  frame  record  pacing     result   bytes/s")
+    for baud, frame, record, lock, _, good, speed in tried:
+        say(
+            "  %4d  %5d  %6d  %-9s  %-7s  %7.0f",
+            baud,
+            frame,
+            record,
+            "lock-step" if lock else "stream",
+            "ok" if good else "FAILED",
+            speed,
+        )
+    good = [t for t in tried if t[5]]
+    if not good:
+        raise SystemExit("kimtape: nothing loaded cleanly; check the wiring")
+    baud, frame, record, lock, extra, _, _ = max(good, key=lambda t: t[6])
+    flags = ["--baud", str(args.baud), "--monitor-baud", str(baud)]
+    flags += ["--lock-step"] if lock else []
+    flags += ["--frame", str(frame)] if extra else []
+    flags += ["--record", str(record)] if record != RECORD else []
+    say("\nfastest: kimtape load --port %s %s", args.port, " ".join(flags))
+
+
 def cmd_term(args):
     """Raw terminal on the port, so the monitor can be driven by hand."""
     import tty  # pylint: disable=import-outside-toplevel
@@ -349,12 +443,52 @@ def deposit_spec(text):
         raise argparse.ArgumentTypeError(str(err)) from None
 
 
+def record_length(text):
+    """Parse a record length, 1 to the most the monitor's L accepts."""
+    value = int(text)
+    if not 1 <= value <= RECORD:
+        raise argparse.ArgumentTypeError("records hold 1 to %d bytes" % RECORD)
+    return value
+
+
 def hexrange(text):
     """Parse a hex range argument such as 0200-0774."""
     lo, _, hi = text.partition("-")
     if not hi:
         raise argparse.ArgumentTypeError("expected LO-HI, e.g. 0200-0774")
     return int(lo, 16), int(hi, 16)
+
+
+def _hex_options():
+    """Options for commands that send hex records or read memory back."""
+    hexopts = argparse.ArgumentParser(add_help=False)
+    hexopts.add_argument(
+        "--monitor-baud",
+        type=int,
+        metavar="RATE",
+        help="run the monitor at this rate for hex records and read back, "
+        "switching it from --baud by writing CNTL30 and back when done",
+    )
+    hexopts.add_argument(
+        "--frame",
+        type=int,
+        choices=FRAMES,
+        help="bits a character when streaming: 11 is 8N2, 12 adds mark parity; "
+        "by default the fewest the monitor's timing allows",
+    )
+    hexopts.add_argument(
+        "--record",
+        type=record_length,
+        default=RECORD,
+        metavar="N",
+        help="data bytes per hex record, up to %d" % RECORD,
+    )
+    hexopts.add_argument(
+        "--lock-step",
+        action="store_true",
+        help="wait for each character's echo instead of streaming",
+    )
+    return hexopts
 
 
 def build_parser():
@@ -381,13 +515,7 @@ def build_parser():
         metavar="MS",
         help="per-character delay used when the link has no echo",
     )
-    common.add_argument(
-        "--line-delay",
-        type=float,
-        default=250.0,
-        metavar="MS",
-        help="per-record delay used when the link has no echo",
-    )
+    common.add_argument("--line-delay", type=float, help=argparse.SUPPRESS)
     common.add_argument(
         "--echo-lead",
         type=int,
@@ -399,15 +527,22 @@ def build_parser():
     common.add_argument(
         "--trace", action="store_true", help="log every byte sent and received"
     )
+    hexopts = _hex_options()
     sub = ap.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser(
-        "load", parents=[common], help="send tapes, verify, optionally run"
+        "load", parents=[common, hexopts], help="send tapes, optionally run"
     )
     p.add_argument("tapes", nargs="*", help="tape files or http(s) URLs")
     p.add_argument("--go", type=hexaddr, metavar="ADDR", help="run from this address")
     p.add_argument("--retries", type=int, default=2)
-    p.add_argument("--no-verify", action="store_true", help="hex: skip the read back")
+    p.add_argument(
+        "--verify",
+        action="store_true",
+        help="read hex records back with Q; the monitor's checksums are "
+        "trusted otherwise",
+    )
+    p.add_argument("--no-verify", action="store_true", help=argparse.SUPPRESS)
     p.add_argument(
         "--hex",
         action="store_true",
@@ -438,7 +573,9 @@ def build_parser():
     )
     p.set_defaults(func=cmd_load)
 
-    p = sub.add_parser("dump", parents=[common], help="punch a memory range to a tape")
+    p = sub.add_parser(
+        "dump", parents=[common, hexopts], help="punch a memory range to a tape"
+    )
     p.add_argument("--range", type=hexrange, required=True, metavar="LO-HI")
     p.add_argument("-o", "--output", help="write here instead of stdout")
     p.set_defaults(func=cmd_dump)
@@ -451,6 +588,27 @@ def build_parser():
         "probe", parents=[common], help="check what this board answers and how"
     )
     p.set_defaults(func=cmd_probe)
+
+    p = sub.add_parser(
+        "tune",
+        parents=[common, hexopts],
+        help="find the fastest hex record settings on this board",
+    )
+    p.add_argument(
+        "--range",
+        type=hexrange,
+        default=(0x0200, 0x03FF),
+        metavar="LO-HI",
+        help="scratch RAM to load test patterns into (default 0200-03FF)",
+    )
+    p.add_argument(
+        "--rates",
+        type=lambda text: [int(r) for r in text.split(",")],
+        default=list(TUNE_RATES),
+        metavar="R,R,...",
+        help="monitor rates to try (default %s)" % ",".join(map(str, TUNE_RATES)),
+    )
+    p.set_defaults(func=cmd_tune)
 
     p = sub.add_parser(
         "term", parents=[common], help="raw terminal; drive the monitor by hand"

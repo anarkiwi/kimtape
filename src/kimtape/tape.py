@@ -18,6 +18,11 @@ def checksum(count, addr, data):
     return (count + (addr >> 8) + (addr & 0xFF) + sum(data)) & 0xFFFF
 
 
+def end_record(count):
+    """The record that ends a tape of count records, checksummed as L checks it."""
+    return b";00%04X%04X" % (count, checksum(0, count, b""))
+
+
 def contiguous_runs(mem):
     """Yield (start, [bytes]) for each contiguous address run in mem."""
     start, run = None, []
@@ -62,21 +67,21 @@ class Tape:
                 "%s: record at $%04X holds %d of %d bytes"
                 % (self.name, addr, len(data), count)
             )
-        # the end record carries the record count in place of both the
-        # address and the checksum
-        want = addr if count == 0 else checksum(count, addr, data)
-        if want != int(match.group(4), 16):
+        # the end record's address is the record count; its checksum sums the
+        # address bytes as the monitor's punch does, or repeats it as some tapes do
+        found = int(match.group(4), 16)
+        if found != checksum(count, addr, data) and (count or found != addr):
             raise ValueError("%s: bad checksum in record at $%04X" % (self.name, addr))
         return count, addr, data
 
     @classmethod
-    def from_memory(cls, name, mem):
+    def from_memory(cls, name, mem, chunk=CHUNK):
         """Build a tape from {addr: byte}, cutting contiguous runs into records."""
         tape = cls(name)
         tape.mem = dict(mem)
         for start, run in contiguous_runs(mem):
-            for off in range(0, len(run), CHUNK):
-                data, addr = bytes(run[off : off + CHUNK]), start + off
+            for off in range(0, len(run), chunk):
+                data, addr = bytes(run[off : off + chunk]), start + off
                 tape.records.append(
                     b";%02X%04X%s%04X"
                     % (
@@ -95,8 +100,7 @@ class Tape:
 
     def text(self):
         """The tape as bytes, records CRLF separated, with an end record."""
-        count = len(self.records)
-        return b"\r\n".join(self.records + [b";00%04X%04X" % (count, count)]) + b"\r\n"
+        return b"\r\n".join(self.records + [end_record(len(self.records))]) + b"\r\n"
 
     def __str__(self):
         lo, hi = self.span

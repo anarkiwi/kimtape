@@ -13,7 +13,17 @@ def test_load_verify_and_go(cli, board, tmp_path):
     want = sample_tape(zp, 0x0000, 0xEF, seed=2)
     want.update(sample_tape(prog, 0x0200, 600, seed=3))
     code, _, err = cli(
-        "load", "--port", board.dev, "--baud", BAUD, "--hex", zp, prog, "--go", "0200"
+        "load",
+        "--port",
+        board.dev,
+        "--baud",
+        BAUD,
+        "--hex",
+        "--verify",
+        zp,
+        prog,
+        "--go",
+        "0200",
     )
     board.finish()
     assert code == 0, err
@@ -27,7 +37,18 @@ def test_dropped_record_is_retried(cli, tmp_path):
     want = sample_tape(prog, 0x0300, 200, seed=4)
     board = Board(drop=3)
     try:
-        code, _, err = cli("load", "--port", board.dev, "--baud", BAUD, "--hex", prog)
+        code, _, err = cli(
+            "load",
+            "--port",
+            board.dev,
+            "--baud",
+            BAUD,
+            "--hex",
+            "--verify",
+            "--record",
+            "24",
+            prog,
+        )
         board.finish()
     finally:
         board.kill()
@@ -54,7 +75,16 @@ def test_unrecoverable_load_fails(cli, tmp_path):
     board = Board(drop=-1)  # drop every record
     try:
         code, _, err = cli(
-            "load", "--port", board.dev, "--baud", BAUD, "--hex", prog, "--retries", "1"
+            "load",
+            "--port",
+            board.dev,
+            "--baud",
+            BAUD,
+            "--hex",
+            "--verify",
+            prog,
+            "--retries",
+            "1",
         )
     finally:
         board.kill()
@@ -178,3 +208,109 @@ def test_memory_that_does_not_hold_stops_the_load(cli, board, tmp_path):
     code, _, err = cli("load", "--port", board.dev, "--baud", BAUD, prog)
     assert code != 0
     assert "memory at $1400 did not hold" in err
+
+
+def hex_load(board, prog, *extra, baud="2400"):
+    """Arguments to load prog with hex records."""
+    return ("load", "--port", board.dev, "--baud", baud, "--hex", prog) + extra
+
+
+def test_streams_long_records_and_trusts_the_checksums(cli, board, tmp_path):
+    prog = str(tmp_path / "prog.ptp")
+    want = sample_tape(prog, 0x0300, 600, seed=31)
+    code, _, err = cli(*hex_load(board, prog))
+    board.finish()
+    assert code == 0, err
+    assert "streaming 11 bit frames" in err and "record 3/3" in err
+    assert "verifying" not in err
+    assert {a: board.mem.get(a) for a in want} == want
+
+
+def test_reported_checksum_error_resumes_lock_step(cli, tmp_path):
+    prog = str(tmp_path / "prog.ptp")
+    want = sample_tape(prog, 0x0300, 240, seed=32)
+    board = Board(drop=4, mode="err")
+    try:
+        code, _, err = cli(*hex_load(board, prog, "--record", "24"))
+        board.finish()
+    finally:
+        board.kill()
+    assert code == 0, err
+    assert "resuming at record 3 of 10, lock-step" in err
+    assert {a: board.mem.get(a) for a in want} == want
+
+
+def test_garbled_stream_falls_back_to_lock_step(cli, tmp_path):
+    prog = str(tmp_path / "prog.ptp")
+    want = sample_tape(prog, 0x0300, 100, seed=33)
+    board = Board(mode="nostream")
+    try:
+        code, _, err = cli(*hex_load(board, prog))
+        board.finish()
+    finally:
+        board.kill()
+    assert code == 0, err
+    assert "resuming at record 1 of 1, lock-step" in err
+    assert {a: board.mem.get(a) for a in want} == want
+
+
+def test_a_load_the_monitor_keeps_refusing_fails(cli, tmp_path):
+    prog = str(tmp_path / "prog.ptp")
+    sample_tape(prog, 0x0300, 100, seed=34)
+    board = Board(drop=-1, mode="err")
+    try:
+        code, _, err = cli(*hex_load(board, prog, "--retries", "1"))
+    finally:
+        board.kill()
+    assert code != 0
+    assert "the monitor did not take prog.ptp" in err
+
+
+def test_monitor_rate_is_switched_and_restored(cli, board, tmp_path):
+    prog = str(tmp_path / "prog.ptp")
+    want = sample_tape(prog, 0x0300, 300, seed=35)
+    code, _, err = cli(
+        *hex_load(board, prog, "--monitor-baud", "4800", "--go", "0300", baud="1200")
+    )
+    board.finish()
+    assert code == 0, err
+    assert "monitor at 4800 baud (CNTL30 $0A), streaming 11 bit frames" in err
+    assert "monitor at 1200 baud (CNTL30 $37), streaming 11 bit frames" in err
+    assert board.mem[0x17F2] == 0x37 and board.go == 0x0300
+    assert {a: board.mem.get(a) for a in want} == want
+
+
+def test_lost_stub_record_is_caught(cli, tmp_path):
+    prog = str(tmp_path / "prog.ptp")
+    want = sample_tape(prog, 0x0400, 300, seed=36)
+    board = Board(drop=1)
+    try:
+        code, _, err = cli(
+            "load", "--port", board.dev, "--baud", "2400", "--stub-at", "0800", prog
+        )
+        board.finish()
+    finally:
+        board.kill()
+    assert code == 0, err
+    assert "did not load" in err and "xmodem at 9600 baud" in err
+    assert {a: board.mem.get(a) for a in want} == want
+
+
+def test_tune_reports_the_fastest_settings(cli, board):
+    code, _, err = cli(
+        "tune",
+        "--port",
+        board.dev,
+        "--baud",
+        "2400",
+        "--rates",
+        "2400,9600",
+        "--range",
+        "0200-02FF",
+    )
+    assert code == 0, err
+    assert "  2400     11     255  stream     ok" in err
+    assert "  9600     10     255  lock-step  ok" in err
+    assert (
+        "fastest: kimtape load --port %s --baud 2400 --monitor-baud" % board.dev in err
+    )

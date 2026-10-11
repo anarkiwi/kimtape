@@ -4,10 +4,21 @@
 
 1200 baud, 8 data bits, no parity, 1 stop bit, no flow control. Press RS before
 running any command: the monitor measures the first carriage return it receives
-to set its own bit rate, and `kimtape sync` sends it.
+to set its own bit rate, and every kimtape command starts by sending one.
 
-Higher rates work on some boards — the monitor derives its divisor from that
-first character — but 1200 is what the ROM was written around.
+The monitor can run up to 9600 baud at 1 MHz, and kimtape can move it there and
+back without a reset by writing CNTL30 (`--monitor-baud`; see
+[protocol.md](protocol.md#the-monitors-serial-line)). Hex records stream in 8N2
+frames up to 4800 baud and go lock-step at 9600. `kimtape tune` loads a test
+pattern into $0200–$03FF at 1200, 2400, 4800 and 9600 baud, reads it back, and
+prints the fastest `load` options that worked:
+
+```sh
+kimtape tune --port /dev/ttyUSB0        # press RS first; overwrites $0200-$03FF
+```
+
+USB adapters make 2 stop bits and mark parity (FTDI, CP210x, CH340, PL2303);
+ones that cannot are caught by the echo check and fall back to lock-step.
 
 `load` talks to the monitor at that rate only long enough to put its XMODEM
 loader in; the program itself goes at 19200 baud, timed by the 6502's own
