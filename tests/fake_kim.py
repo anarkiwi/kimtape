@@ -9,13 +9,16 @@ slave device path on stdout, then serves until stdin closes.
 import os
 import pty
 import re
+import select
 import sys
 import termios
 import threading
+import time
 
 RECORD = re.compile(rb";([0-9A-F]{2})([0-9A-F]{4})((?:[0-9A-F]{2})*)([0-9A-F]{4})")
-SAL, SAH, EAL, EAH = 0x17F5, 0x17F6, 0x17F7, 0x17F8
+EAL, EAH = 0x17F7, 0x17F8
 CHUNK = 24
+CHAR_TIME = 0.001  # the monitor's output takes line time
 
 
 def cks(count, addr, data):
@@ -39,9 +42,23 @@ class FakeKIM:  # pylint: disable=too-many-instance-attributes
 
     PAD = b"\x00" * 6  # teletype carriage fill, as the ROM sends
 
+    def say(self, data):
+        """Monitor output.  Its UART is in software and cannot receive while it
+        sends, so characters arriving meanwhile are lost, though the hardware
+        still echoes them."""
+        for i in range(len(data)):
+            self.out(data[i : i + 1])
+            time.sleep(CHAR_TIME)
+        while select.select([self.fd], [], [], 0)[0]:
+            try:
+                ch = os.read(self.fd, 1)
+            except OSError:
+                return
+            self.out(ch)
+
     def prompt(self):
         """The monitor's address and contents display."""
-        self.out(
+        self.say(
             b"\r\n%s%04X %02X " % (self.PAD, self.addr, self.mem.get(self.addr, 0))
         )
 
@@ -76,7 +93,7 @@ class FakeKIM:  # pylint: disable=too-many-instance-attributes
                 self.digits = b""
                 if not self.woke:
                     self.woke = True  # first CR sets the bit rate
-                    self.out(b"\r\n" + self.PAD + b"KIM")
+                    self.say(b"\r\n" + self.PAD + b"KIM")
                 else:
                     self.addr = (self.addr + 1) & 0xFFFF
                 self.prompt()
@@ -87,7 +104,7 @@ class FakeKIM:  # pylint: disable=too-many-instance-attributes
                 self.punch()
             elif ch == b"G":
                 self.gone = self.addr
-                self.out(b"\r\n")
+                self.say(b"\r\n")
                 return
 
     def store(self, addr, value):
@@ -110,7 +127,7 @@ class FakeKIM:  # pylint: disable=too-many-instance-attributes
                 count, addr = int(m.group(1), 16), int(m.group(2), 16)
                 data = bytes.fromhex(m.group(3).decode())
                 if count == 0:
-                    self.out(b"\r\n" + self.PAD + b"KIM")
+                    self.say(b"\r\n" + self.PAD + b"KIM")
                     self.prompt()
                     return
                 if cks(count, addr, data) != int(m.group(4), 16):
@@ -124,16 +141,16 @@ class FakeKIM:  # pylint: disable=too-many-instance-attributes
                 line += ch
 
     def punch(self):
-        """DUMPT: write SAL/SAH through EAL/EAH as tape records."""
-        lo = self.mem.get(SAL, 0) | (self.mem.get(SAH, 0) << 8)
+        """DUMPT: write the open address through EAL/EAH as tape records."""
+        lo = self.addr
         hi = self.mem.get(EAL, 0) | (self.mem.get(EAH, 0) << 8)
-        self.out(b"\r\n" + self.PAD)
+        self.say(b"\r\n" + self.PAD)
         n = 0
         for base in range(lo, hi, CHUNK):
             data = bytes(
                 self.mem.get(a, 0xFF) for a in range(base, min(base + CHUNK, hi))
             )
-            self.out(
+            self.say(
                 b";%02X%04X%s%04X\r\n%s"
                 % (
                     len(data),
@@ -144,7 +161,7 @@ class FakeKIM:  # pylint: disable=too-many-instance-attributes
                 )
             )
             n += 1
-        self.out(b";00%04X%04X\r\n%s" % (n, n, self.PAD))
+        self.say(b";00%04X%04X\r\n%s" % (n, n, self.PAD))
         self.prompt()
 
 

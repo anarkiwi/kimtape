@@ -7,7 +7,7 @@ Commands, uppercase only:
 ``DD.``               deposit a byte and advance
 ``CR``                advance and show
 ``L``                 load a paper tape
-``Q``                 punch a paper tape over SAL/SAH to EAL/EAH
+``Q``                 punch a paper tape from the open address to EAL/EAH
 ``G``                 execute from the open address
 ====================  ==================================================
 
@@ -22,6 +22,7 @@ import time
 from .tape import RECORD, checksum
 
 SAL = 0x17F5  # monitor scratch: start lo/hi then end lo/hi
+EAL = 0x17F7
 PROMPT = re.compile(rb"([0-9A-F]{4}) ([0-9A-F]{2})")
 
 
@@ -61,11 +62,15 @@ class Monitor:
         self.p.drain()
 
     def deposit(self, addr, data):
-        """Write bytes from addr, advancing as it goes."""
+        """Write bytes from addr, advancing as it goes.
+
+        Each deposit draws a fresh prompt, and the monitor cannot receive while
+        it prints one, so every byte waits for the line to go quiet.
+        """
         self.open_addr(addr)
         for byte in data:
             self.p.write(("%02X." % byte).encode())
-        self.p.drain()
+            self.p.drain()
 
     def load(self, tape):
         """Send a tape with the L command, one record at a time."""
@@ -88,7 +93,8 @@ class Monitor:
 
     def punch(self, lo, hi):
         """Run the monitor's paper tape punch over $lo-$hi; return {addr: byte}."""
-        self.deposit(SAL, bytes([lo & 0xFF, lo >> 8, (hi + 1) & 0xFF, (hi + 1) >> 8]))
+        self.deposit(EAL, bytes([(hi + 1) & 0xFF, (hi + 1) >> 8]))
+        self.open_addr(lo)
         self.p.take()
         self.p.write(b"Q")
         budget = time.time() + 30 + (hi - lo + 1) * 3 * self.p.char_time
