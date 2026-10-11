@@ -46,3 +46,18 @@ third-party program is committed to this repository or downloaded during CI.
 `lint` runs black and pylint. `test` runs the suite on every supported Python.
 `example` shellchecks and runs the worked example against the fake board.
 Coverage below 85% fails the build.
+
+## Releases
+
+`.github/workflows/release.yml` publishes to PyPI by trusted publishing when a
+GitHub release is published. One-time setup:
+
+1. On PyPI, add a pending trusted publisher (https://pypi.org/manage/account/publishing/):
+   project `kimtape`, owner `anarkiwi`, repository `kimtape`, workflow
+   `release.yml`, environment `pypi`.
+2. The repository has an environment named `pypi`.
+
+To release, bump `version` in `pyproject.toml` and `__version__` in
+`src/kimtape/__init__.py`, merge, then publish a release tagged `v<version>`
+(e.g. `v0.1.1`); the build fails if the tag and the version differ.
+Run the workflow by hand to build and check without publishing.
