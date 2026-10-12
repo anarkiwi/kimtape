@@ -3,7 +3,7 @@
 Paper tape loader for the MOS Technology KIM-1 and its replicas. Loads, dumps and
 verifies programs over a serial line using the stock ROM monitor — no extra
 hardware, no pyserial, standard library only. `load` bootstraps a small XMODEM
-receiver through the monitor and sends the program at 19200 baud, about 30
+receiver through the monitor and sends the program at 38400 baud, about 40
 times faster than paper tape records at 1200.
 
 Works with the KIM-1, PAL-1, PAL-II, Micro-KIM, KIM Clone and simulators exposed
@@ -46,12 +46,14 @@ kimtape convert xKIM.hex -o xkim.ptp          # format read from the content
 Press RS before running: the monitor sets its bit rate from the first carriage
 return it receives. Defaults are 1200 baud, 8N1, no flow control.
 
-`load` falls back to 9600 baud and then to hex records by itself if 19200 does
-not work; `--baud-fast` and `--hex` choose up front. Hex records stream in
-frames sized from the monitor's own timing, 255 bytes a record, and the
-monitor's checksums are trusted; `--verify` reads them back. `--monitor-baud
-4800` moves the monitor to 4800 baud for the hex stage without a reset and back
-afterwards, four times faster; `tune` finds the fastest setting a board takes.
+`load` falls back to 19200, then 9600 baud, then hex records by itself if
+38400 does not work; `--baud-fast` caps the first rate and `--hex` skips the
+loader. Hex records, the loader's included, stream in frames sized from the
+monitor's own timing, 255 bytes a record, and the monitor's checksums are
+trusted; `--verify` reads them back. `load` and `dump` move the monitor to 4800
+baud for hex records and read back without a reset, and back afterwards, when
+`--baud` is slower; `--monitor-baud RATE` picks another rate, `--monitor-baud 0`
+stays at `--baud`, and `tune` finds the fastest setting a board takes.
 The XMODEM loader reads each byte back as it stores it. `probe` reports what a
 board answers when something is wrong; start there.
 
@@ -65,7 +67,7 @@ port = Port("/dev/ttyUSB0", 1200)
 mon = Monitor(port)
 mon.sync()
 tape = Tape("game.ptp", open("game.ptp", "rb").read())
-if not Bootstrap(mon, [19200, 9600]).load(tape.mem, go=0x0200):
+if not Bootstrap(mon, [38400, 19200, 9600], baud=4800).load(tape.mem, go=0x0200):
     mon.load(tape)   # hex records
     mon.go(0x0200)
 ```

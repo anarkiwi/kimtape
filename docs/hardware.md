@@ -8,7 +8,9 @@ to set its own bit rate, and every kimtape command starts by sending one.
 
 The monitor can run up to 9600 baud at 1 MHz, and kimtape can move it there and
 back without a reset by writing CNTL30 (`--monitor-baud`; see
-[protocol.md](protocol.md#the-monitors-serial-line)). Hex records stream in 8N2
+[protocol.md](protocol.md#the-monitors-serial-line)). `load` and `dump` run it
+at 4800 baud for hex records when `--baud` is slower; if the monitor stops
+answering there, press RS and add `--monitor-baud 0` to stay at `--baud`. Hex records stream in 8N2
 frames up to 4800 baud and go lock-step at 9600. `kimtape tune` loads a test
 pattern into $0200–$03FF at 1200, 2400, 4800 and 9600 baud, reads it back, and
 prints the fastest `load` options that worked:
@@ -21,17 +23,17 @@ USB adapters make 2 stop bits and mark parity (FTDI, CP210x, CH340, PL2303);
 ones that cannot are caught by the echo check and fall back to lock-step.
 
 `load` talks to the monitor at that rate only long enough to put its XMODEM
-loader in; the program itself goes at 19200 baud, timed by the 6502's own
+loader in; the program itself goes at 38400 baud, timed by the 6502's own
 clock rather than the monitor's measurement. Every common USB to TTL adapter
 (FTDI, CP210x, CH340, PL2303) makes 9600, 19200 and 38400 within a fraction of
 a percent, and the loader tolerates about 4% either way (see
 [protocol.md](protocol.md#bit-timing)), so a board on a 1 MHz crystal needs
-nothing set. If the load stops at `xmodem at 19200 baud`:
+nothing set. If the load stops at `xmodem at 38400 baud`:
 
 | Try | When |
 | --- | --- |
-| nothing: kimtape retries at 9600, then falls back to hex | the usual case is handled |
-| `--baud-fast 9600` | 19200 fails every time; skips the wasted attempt |
+| nothing: kimtape retries at 19200 and 9600, then falls back to hex | the usual case is handled |
+| `--baud-fast 19200` or `9600` | 38400 fails every time; skips the wasted attempts |
 | `--hex` | the board is not at 1 MHz, or anything else between it and the host is |
 | `--stub-at ADDR` | the loader's automatic placement picks RAM that is not there |
 
@@ -101,8 +103,9 @@ that fits the unexpanded KIM-1 needs none of them.
 | Symptom | Cause |
 | --- | --- |
 | no reply to anything | not in TTY mode, TX/RX swapped, or RS not pressed |
+| `no answer at 4800 baud` | the monitor will not run at 4800; press RS and add `--monitor-baud 0` |
 | `KIM` appears but commands are ignored | characters arriving faster than the monitor can take them; see `kimtape probe` |
 | a range above $0400 reads back wrong or erased | that RAM is not decoded; check `SW4` and `SW5` position 1 |
 | `memory at $XXXX did not hold what was written` | the same, found by the XMODEM loader as it stores |
-| no reply after `xmodem at 19200 baud` | see [Serial line](#serial-line) above |
+| no reply after `xmodem at 38400 baud` | see [Serial line](#serial-line) above |
 | program loads but the keypad misbehaves | the TTY link is still fitted |

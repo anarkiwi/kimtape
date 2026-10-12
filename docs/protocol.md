@@ -2,7 +2,7 @@
 
 `load` puts a small XMODEM-CRC receiver (the stub) into RAM through the
 monitor's own paper tape loader, starts it, and sends the program to it at
-19200 baud. `--hex` sends the program as paper tape records instead, which is
+38400 baud. `--hex` sends the program as paper tape records instead, which is
 what the rest of this page up to [the XMODEM loader](#the-xmodem-loader)
 describes.
 
@@ -85,10 +85,12 @@ takes a mismatch of up to (½ − 1/16) / 9.5 = 4.6%. So the monitor's line tops
 out at 9600 baud at 1 MHz. kimtape reads CNTL30 after the first CR and, if
 another count is closer to the host's rate, deposits it; RAM is all that
 changes. The same deposit moves the monitor to another rate without a reset:
-`--monitor-baud 4800` syncs at `--baud`, writes CNTL30 for 4800, switches the
-port as the `.` goes out, and writes the original rate back before anything
-runs or kimtape exits. Should kimtape stop half way, press RS and the monitor
-measures `--baud` again.
+`load` and `dump` sync at `--baud`, write CNTL30 for 4800 (or `--monitor-baud`)
+when `--baud` is slower, switch the port as the `.` goes out, and write the
+original rate back before anything runs or kimtape exits; `--monitor-baud 0`
+leaves the monitor at `--baud`. Should kimtape stop half way, press RS and the
+monitor measures `--baud` again; a failure at the switched rate says so and
+suggests `--monitor-baud 0`.
 
 ### Receiving a character
 
@@ -209,8 +211,8 @@ is the bootstrap's hex stage, 416 bytes, with its check.
 | 4800 | streamed, 255 byte records | 85 s | 205 | 192 s | 2.1 s |
 | 9600 | lock-step, 255 byte records | 73 s | 239 | 129 s | 1.8 s |
 
-`--monitor-baud 4800` makes the 1200 baud user's bootstrap stage four times
-faster. 9600 lock-step depends on the adapter's turnaround: at 1 ms it beats
+The default `--monitor-baud` of 4800 makes the 1200 baud user's bootstrap
+stage four times faster. 9600 lock-step depends on the adapter's turnaround: at 1 ms it beats
 4800 streamed, at an FTDI's default 16 ms it is far slower. `kimtape tune`
 measures it on the board.
 
@@ -226,9 +228,10 @@ measures it on the board.
    `--go` address or returns to the monitor (`$1C4F`, which keeps the bit
    rate the monitor measured). kimtape switches back to the monitor's rate.
 
-If no `C` arrives within 3 s at 19200 (or `--baud-fast`), kimtape waits for the
-stub to give up and return to the monitor, then tries again at 9600; if that
-fails too it loads with hex records, saying so.
+If no `C` arrives within 3 s at 38400 (or `--baud-fast`), kimtape waits for the
+stub to give up and return to the monitor, then tries again at each slower rate
+in turn, 19200 then 9600; if those fail too it loads with hex records, saying
+so.
 
 ### Payload
 
@@ -343,4 +346,5 @@ timer:
 
 Hex records stream at 2.05 characters a byte in 11 bit frames: 51 bytes/s at
 1200 baud, 205 at 4800 (see [hex throughput](#hex-throughput)). Putting the
-stub in costs about 8 s at 1200 baud, 2 s with `--monitor-baud 4800`.
+stub in costs about 8 s at 1200 baud, 2 s at the default `--monitor-baud` of
+4800.
