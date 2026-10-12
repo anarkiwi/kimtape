@@ -1,6 +1,7 @@
 """Transfers driven against the fake KIM-1 monitor on a pty."""
 
 import os
+import re
 
 import pytest
 from conftest import BAUD, Board, sample_tape
@@ -142,7 +143,7 @@ def test_xmodem_loads_segments_and_runs_the_program(cli, board, tmp_path):
     )
     board.finish()
     assert code == 0, err
-    assert "xmodem at 19200 baud" in err and "block 10/10" in err
+    assert "xmodem at 38400 baud" in err and "block 10/10" in err
     assert board.go == 0x0200
     assert {a: board.mem.get(a) for a in want} == want
 
@@ -175,18 +176,24 @@ def test_xmodem_returns_to_the_monitor_for_deposits(cli, board, tmp_path, rate):
     assert {a: board.mem.get(a) for a in want} == want
 
 
-def test_silent_stub_falls_back_to_hex(cli, tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "fast, tried",
+    [((), (38400, 19200, 9600)), (("--baud-fast", "19200"), (19200, 9600))],
+)
+def test_silent_stub_falls_back_to_hex(
+    cli, tmp_path, monkeypatch, fast, tried
+):  # pylint: disable=too-many-arguments,too-many-positional-arguments
     monkeypatch.setattr(bootstrap, "START_WAIT", 0.5)
     prog = str(tmp_path / "prog.ptp")
     want = sample_tape(prog, 0x0300, 100, seed=25)
     board = Board(mode="nostub")
     try:
-        code, _, err = cli("load", "--port", board.dev, "--baud", BAUD, prog)
+        code, _, err = cli("load", "--port", board.dev, "--baud", BAUD, *fast, prog)
         board.finish()
     finally:
         board.kill()
     assert code == 0, err
-    assert "at 19200 baud" in err and "at 9600 baud" in err
+    assert re.findall(r"xmodem at (\d+) baud", err) == [str(r) for r in tried]
     assert "falling back to hex" in err
     assert {a: board.mem.get(a) for a in want} == want
 
@@ -280,6 +287,43 @@ def test_monitor_rate_is_switched_and_restored(cli, board, tmp_path):
     assert {a: board.mem.get(a) for a in want} == want
 
 
+@pytest.mark.parametrize(
+    "baud, extra, switch",
+    [("1200", (), "4800"), ("1200", ("--monitor-baud", "0"), None), ("9600", (), None)],
+)
+def test_monitor_baud_default(
+    cli, board, tmp_path, baud, extra, switch
+):  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    """Hex records go at 4800 unless --baud is as fast or the user opts out."""
+    prog = str(tmp_path / "prog.ptp")
+    want = sample_tape(prog, 0x0300, 100, seed=37)
+    code, _, err = cli(*hex_load(board, prog, *extra, baud=baud))
+    board.finish()
+    assert code == 0, err
+    rates = re.findall(r"monitor at (\d+) baud", err)
+    assert rates == [switch or baud, baud]
+    assert {a: board.mem.get(a) for a in want} == want
+
+
+@pytest.mark.parametrize("command", ["load", "dump"])
+def test_monitor_lost_at_the_switched_rate_says_how_to_stay(cli, tmp_path, command):
+    prog = str(tmp_path / "prog.ptp")
+    sample_tape(prog, 0x0300, 100, seed=38)
+    board = Board(mode="fixed")
+    try:
+        args = hex_load(board, prog, baud="1200")
+        if command == "dump":
+            args = ("dump",) + args[1:5] + ("--range", "0300-0310")
+        code, _, err = cli(*args)
+        assert code != 0
+        assert "no answer at 4800 baud" in err
+        assert "retry with --monitor-baud 0 to keep it at 1200" in err
+        code, _, err = cli(*(args + ("--monitor-baud", "0")))
+        assert code == 0, err
+    finally:
+        board.kill()
+
+
 def test_lost_stub_record_is_caught(cli, tmp_path):
     prog = str(tmp_path / "prog.ptp")
     want = sample_tape(prog, 0x0400, 300, seed=36)
@@ -292,7 +336,7 @@ def test_lost_stub_record_is_caught(cli, tmp_path):
     finally:
         board.kill()
     assert code == 0, err
-    assert "did not load" in err and "xmodem at 9600 baud" in err
+    assert "did not load" in err and "xmodem at 19200 baud" in err
     assert {a: board.mem.get(a) for a in want} == want
 
 

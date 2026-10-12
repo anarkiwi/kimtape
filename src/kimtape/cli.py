@@ -24,6 +24,7 @@ from .xmodem import MONITOR
 PROBE_ADDR = 0x1780  # 6532 RAM, present on every KIM-1
 PROBE_BYTES = bytes([0x00, 0x00, 0x10, 0x00])
 TUNE_RATES = (1200, 2400, 4800, 9600)
+MONITOR_BAUD = 4800  # default monitor rate for hex records, if faster than --baud
 
 DESCRIPTION = "Load, dump and run programs on a KIM-1 over a serial line."
 EPILOG = """\
@@ -32,7 +33,7 @@ examples:
   kimtape load --port /dev/ttyUSB0 https://example.com/game.ptp --go 0200
   kimtape load --port /dev/ttyUSB0 --hex game.ptp     # no XMODEM stub
   kimtape dump --port /dev/ttyUSB0 --range 0200-0774 -o game.ptp
-  kimtape load --port /dev/ttyUSB0 --hex --monitor-baud 4800 game.ptp
+  kimtape load --port /dev/ttyUSB0 --hex --monitor-baud 0 game.ptp  # stay at --baud
   kimtape probe --port /dev/ttyUSB0
   kimtape tune --port /dev/ttyUSB0
   kimtape term --port /dev/ttyUSB0
@@ -109,6 +110,23 @@ def cmd_convert(args):
     return 0
 
 
+def monitor_baud(args):
+    """The rate for hex records and read back, or None to stay at --baud."""
+    if args.monitor_baud is None:
+        return MONITOR_BAUD if args.baud < MONITOR_BAUD else None
+    return args.monitor_baud or None
+
+
+def switched(mon, err):
+    """err, with the way out added if it struck while the monitor was switched."""
+    if not isinstance(err.code, str) or mon.p.baud == mon.home:
+        return err
+    return SystemExit(
+        "%s\nkimtape: the monitor was at %d baud; press RS and retry with "
+        "--monitor-baud 0 to keep it at %d" % (err.code, mon.p.baud, mon.home)
+    )
+
+
 def cmd_load(args):
     """Send tapes, verify each one, and optionally start the program."""
     tapes = read_tapes(args.tapes)
@@ -118,21 +136,27 @@ def cmd_load(args):
     mon = open_monitor(args, port)
     try:
         mon.sync(args.sync_tries)
-        go = args.go if args.go is not None and not args.deposit else MONITOR
-        if args.hex or not _bootstrap(mon, tapes, go, args):
-            mon.rate(args.monitor_baud)
-            for tape in tapes:
-                _load_one(mon, tape, args)
-            mon.rate()
-        elif go != MONITOR:
-            return 0
-        for addr, data in args.deposit or []:
-            mon.say("depositing %s at $%04X", data.hex(" ").upper(), addr)
-            mon.deposit(addr, data)
-        if args.go is not None:
-            mon.go(args.go)
+        return _load(mon, tapes, args)
+    except SystemExit as err:
+        raise switched(mon, err) from None
     finally:
         port.close()
+
+
+def _load(mon, tapes, args):
+    go = args.go if args.go is not None and not args.deposit else MONITOR
+    if args.hex or not _bootstrap(mon, tapes, go, args):
+        mon.rate(monitor_baud(args))
+        for tape in tapes:
+            _load_one(mon, tape, args)
+        mon.rate()
+    elif go != MONITOR:
+        return 0
+    for addr, data in args.deposit or []:
+        mon.say("depositing %s at $%04X", data.hex(" ").upper(), addr)
+        mon.deposit(addr, data)
+    if args.go is not None:
+        mon.go(args.go)
     return 0
 
 
@@ -142,8 +166,8 @@ def _bootstrap(mon, tapes, go, args):
     for tape in tapes:
         mon.say("xmodem: %s", tape)
         mem.update(tape.mem)
-    rates = [args.baud_fast] + [r for r in (9600,) if r != args.baud_fast]
-    if Bootstrap(mon, rates, args.stub_at, args.monitor_baud, args.verify).load(
+    rates = sorted((r for r in STUBS if r <= args.baud_fast), reverse=True)
+    if Bootstrap(mon, rates, args.stub_at, monitor_baud(args), args.verify).load(
         mem, go
     ):
         return True
@@ -181,9 +205,11 @@ def cmd_dump(args):
     mon = open_monitor(args, port)
     try:
         mon.sync(args.sync_tries)
-        mon.rate(args.monitor_baud)
+        mon.rate(monitor_baud(args))
         mem = mon.punch(lo, hi)
         mon.rate()
+    except SystemExit as err:
+        raise switched(mon, err) from None
     finally:
         port.close()
     holes = (hi - lo + 1) - sum(1 for a in range(lo, hi + 1) if a in mem)
@@ -467,7 +493,9 @@ def _hex_options():
         type=int,
         metavar="RATE",
         help="run the monitor at this rate for hex records and read back, "
-        "switching it from --baud by writing CNTL30 and back when done",
+        "switching it from --baud by writing CNTL30 and back when done; "
+        "load and dump default to %d when --baud is slower, and 0 stays at "
+        "--baud" % MONITOR_BAUD,
     )
     hexopts.add_argument(
         "--frame",
@@ -552,10 +580,11 @@ def build_parser():
     p.add_argument(
         "--baud-fast",
         type=int,
-        default=19200,
+        default=38400,
         choices=sorted(STUBS),
         metavar="RATE",
-        help="XMODEM bit rate, one of %(choices)s; 9600 is tried next, then hex",
+        help="fastest XMODEM bit rate, one of %(choices)s (default %(default)s); "
+        "each slower one is tried next, then hex",
     )
     p.add_argument(
         "--stub-at",

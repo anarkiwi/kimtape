@@ -14,9 +14,10 @@ examples/load.py kimventure --port /dev/ttyUSB0
 
 `examples/kimventure.sh` is a thin wrapper over the same thing.
 
-Press RS first. Most of the run is putting the XMODEM loader in at 1200 baud,
-about 8 s; `-- --monitor-baud 4800` cuts that to 2 s, and `-- --hex` sends the
-whole program as hex records instead.
+Press RS first. Most of the run is putting the XMODEM loader in, about 2 s
+with the monitor moved to 4800 baud; `-- --monitor-baud 0` keeps it at 1200
+(about 8 s) for a board that will not go faster, and `-- --hex` sends the whole
+program as hex records instead.
 
 | Option | Effect |
 | --- | --- |

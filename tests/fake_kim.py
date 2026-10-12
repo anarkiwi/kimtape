@@ -59,7 +59,7 @@ class FakeKIM:  # pylint: disable=too-many-instance-attributes
         self.fd, self.mem, self.addr, self.digits = master, {}, 0, b""
         self.drop, self.seen, self.gone, self.woke = drop, 0, None, False
         self.mute, self.deaf = mode == "mute", False
-        self.stubs, self.mode = mode != "nostub", mode
+        self.stubs, self.mode, self.counts = mode != "nostub", mode, None
 
     def out(self, data):
         """Write to the line unless this board has gone deaf."""
@@ -147,6 +147,8 @@ class FakeKIM:  # pylint: disable=too-many-instance-attributes
         """Honour the KIM memory map: only RAM sticks."""
         if addr < 0x1400 or 0x17E7 <= addr <= 0x17FF:
             self.mem[addr] = value
+        if addr == CNTL30 and self.mode == "fixed" and value not in self.counts:
+            self.deaf = True  # this board's UART works only at its reset rate
 
     def ignore(self, seconds):
         """Hear nothing for a while, as a stub that cannot be understood."""
@@ -197,6 +199,7 @@ class FakeKIM:  # pylint: disable=too-many-instance-attributes
         baud = RATES.get(termios.tcgetattr(self.fd)[5], 1200)
         self.mem[CNTL30] = max(0, timing.autobaud(timing.bit_time(baud))[-1])
         self.mem[CNTL30 + 1] = 0
+        self.counts = {self.mem[CNTL30], timing.best_count(timing.bit_time(baud))}
 
     def pending(self):
         """Characters waiting on the line."""
@@ -207,6 +210,7 @@ class FakeKIM:  # pylint: disable=too-many-instance-attributes
 
         Faults: drop N skips record N whole, as a lost ';' does; mode err spoils
         a data digit so its checksum fails; nostream garbles what comes in a rush.
+        Mode fixed goes deaf once CNTL30 is set for any rate but the reset one.
         """
         model = Listing(0, Line())
         model.mem = Stores(self)
