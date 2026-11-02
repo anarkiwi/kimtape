@@ -8,7 +8,7 @@ version = "0.2.0"
 description = "Paper tape loader for the MOS Technology KIM-1 and its replicas"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 authors = [{ name = "anarkiwi" }]
 keywords = ["kim-1", "6502", "paper-tape", "retrocomputing", "pal-1", "pal-ii"]
 classifiers = [
@@ -44,7 +44,7 @@ omit = ["*/__main__.py"]
 
 [tool.black]
 line-length = 88
-target-version = ["py311"]
+target-version = ["py312"]
 
 [tool.pylint.main]
 source-roots = ["src"]
