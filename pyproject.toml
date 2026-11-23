@@ -29,7 +29,7 @@ Issues = "https://github.com/anarkiwi/kimtape/issues"
 kimtape = "kimtape.cli:main"
 
 [project.optional-dependencies]
-dev = ["black", "py65", "pylint", "pytest", "pytest-cov", "pytest-xdist", "tqdm"]
+dev = ["black", "jennings>=0.24.0", "pylint", "pytest", "pytest-cov", "pytest-xdist", "tqdm"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
