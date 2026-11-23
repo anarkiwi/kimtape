@@ -1,4 +1,4 @@
-"""A KIM-1 on py65 with its TTY lines modelled bit by bit, timed in CPU cycles.
+"""A KIM-1 on jennings with its TTY lines modelled bit by bit, timed in CPU cycles.
 
 TTY input is 6530 port A bit 7 and output port B bit 0, both idle high.  The
 output is the AND of port B bit 0 and the input, which is the KIM-1's echo.
@@ -8,7 +8,7 @@ output is the AND of port B bit 0 and the input, which is the KIM-1's echo.
 import bisect
 import math
 
-from py65.devices.mpu6502 import MPU
+from jennings.devices.mpu6502 import MPU
 
 SAD, SBD, START = 0x1740, 0x1742, 0x1C4F
 ACCESS = 3  # absolute mode I/O lands on the last of the instruction's 4 cycles
@@ -88,8 +88,6 @@ class Board:
         self.mem = Memory(self, ram)
         self.mem.data[SBD] = 0x07  # as the monitor's INIT1 leaves it
         self.mpu = MPU(memory=self.mem)
-        self.mpu.cycletime = list(MPU.cycletime)
-        self.mpu.cycletime[0xCE] = 6  # py65 1.2 counts DEC absolute as 3
         self.cursor = 0.0
 
     def now(self):

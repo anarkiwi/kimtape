@@ -17,7 +17,7 @@ and writes `src/kimtape/stub.py`; `stub/build.py --check` (run in CI) fails if
 the committed bytes are not what the source assembles to. Run the build after
 any change to the source.
 
-`tests/kimsim.py` runs it on py65 with the TTY lines modelled bit by bit in
+`tests/kimsim.py` runs it on jennings with the TTY lines modelled bit by bit in
 CPU cycles: a host UART at any rate and error drives port A bit 7, and port B
 bit 0, ANDed with the input as the KIM-1 echo does, is decoded back. The stub
 tests use it directly; `tests/measure.py tolerance` and
@@ -59,7 +59,7 @@ also times `Q`. `tests/test_timing.py` drives it with host lines to check the
 pacing rule in `src/kimtape/timing.py`.
 
 `tests/measure.py rom --image kim.bin` runs the same lines through a monitor
-ROM image ($1800–$1FFF) on py65 and checks the model agrees character by
+ROM image ($1800–$1FFF) on jennings and checks the model agrees character by
 character, cycle for cycle, including on lines it garbles, and that `Q` takes
 the cycles the model says. No ROM is in this repository; assemble one from the
 published listing (e.g. github.com/jefftranter/6502, `asm/KIM-1/ROMs/kim.s`):
@@ -67,9 +67,6 @@ published listing (e.g. github.com/jefftranter/6502, `asm/KIM-1/ROMs/kim.s`):
 ```sh
 ca65 --feature labels_without_colons kim.s && ld65 -t none -o kim.bin kim.o
 ```
-
-py65 1.2 counts `DEC` absolute as 3 cycles rather than 6; `kimsim.Board`
-corrects it, which DELAY's loop depends on.
 
 ## The catalogue
 
